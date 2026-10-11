@@ -1,0 +1,52 @@
+name: WinGet package validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'winget/**'
+      - 'scripts/*winget*.ps1'
+      - '.github/workflows/winget.yml'
+  pull_request:
+    paths:
+      - 'winget/**'
+      - 'scripts/*winget*.ps1'
+      - '.github/workflows/winget.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Prepare WinGet in the ephemeral runner
+        shell: pwsh
+        run: |
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            Install-PackageProvider -Name NuGet -Force | Out-Null
+            Install-Module -Name Microsoft.WinGet.Client -RequiredVersion 1.29.380 -Scope CurrentUser -Force -Repository PSGallery
+            Import-Module Microsoft.WinGet.Client
+            Repair-WinGetPackageManager -AllUsers
+            $taskPackage = Get-AppxPackage Microsoft.DesktopAppInstaller
+            if ($taskPackage) {
+              $env:PATH += ';' + $taskPackage.InstallLocation
+              $taskPackage.InstallLocation | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+            }
+          }
+          winget --version
+          if ($LASTEXITCODE -ne 0) { throw 'WinGet bootstrap failed.' }
+      - name: Validate manifest and public installer hash
+        run: ./scripts/verify-winget.ps1 -VerifyInstaller
+      - name: Test WinGet installation and removal
+        run: ./scripts/verify-winget-install.ps1
+      - name: Installation evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: winget-installation-evidence
+          if-no-files-found: ignore
+          path: artifacts/winget-install-verification.json
