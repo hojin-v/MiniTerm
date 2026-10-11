@@ -3,10 +3,19 @@ param(
     [switch]$VerifyInstaller
 )
 $ErrorActionPreference = 'Stop'
+trap {
+    if ($env:GITHUB_ACTIONS -eq 'true') {
+        $taskFailure = ($_ | Out-String).Trim().Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
+        Write-Output ('::error title=WinGet manifest validation::' + $taskFailure)
+    }
+    throw
+}
 $taskRoot = Split-Path -Parent $PSScriptRoot
 $taskDirectory = if ([IO.Path]::IsPathRooted($ManifestDirectory)) { [IO.Path]::GetFullPath($ManifestDirectory) } else { [IO.Path]::GetFullPath((Join-Path $taskRoot $ManifestDirectory)) }
-& winget validate --manifest $taskDirectory --disable-interactivity
-if ($LASTEXITCODE -ne 0) { throw 'WinGet manifest validation failed.' }
+$taskValidationOutput = & winget validate --manifest $taskDirectory --disable-interactivity 2>&1
+$taskValidationExit = $LASTEXITCODE
+$taskValidationOutput | ForEach-Object { Write-Output $_ }
+if ($taskValidationExit -ne 0) { throw ('WinGet manifest validation failed, exit ' + $taskValidationExit + ': ' + ($taskValidationOutput -join "`n")) }
 $taskManifest = Get-Content -LiteralPath (Join-Path $taskDirectory 'hojin-v.MiniTerm.installer.yaml') -Raw -Encoding UTF8
 function Read-Field([string]$Name) {
     $taskMatches = [regex]::Matches($taskManifest, ('(?m)^\s*' + [regex]::Escape($Name) + ':\s*(\S+)\s*$'))

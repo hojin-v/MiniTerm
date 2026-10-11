@@ -1,5 +1,12 @@
 param([string]$ManifestDirectory = 'winget/manifests/h/hojin-v/MiniTerm/0.1.0-alpha.1')
 $ErrorActionPreference = 'Stop'
+trap {
+    if ($env:GITHUB_ACTIONS -eq 'true') {
+        $taskFailure = ($_ | Out-String).Trim().Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
+        Write-Output ('::error title=WinGet installation::' + $taskFailure)
+    }
+    throw
+}
 # This test installs/uninstalls and registers notifications. Never run it on the developer's desktop.
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:RUNNER_OS -ne 'Windows' -or -not $env:RUNNER_TEMP) { throw 'Installer test is restricted to an ephemeral GitHub-hosted Windows runner.' }
 $taskRegistry = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniTerm'
@@ -19,8 +26,10 @@ $taskSettings = Join-Path $taskData 'settings.json'
 $taskSettingsHash = (Get-FileHash -LiteralPath $taskSettings -Algorithm SHA256).Hash
 & winget settings --enable LocalManifestFiles --disable-interactivity
 if ($LASTEXITCODE -ne 0) { throw 'Cannot enable local manifest testing in the ephemeral runner.' }
-& winget install --manifest $taskDirectory --silent --scope user --location $taskInstall --disable-interactivity --accept-source-agreements --accept-package-agreements
-if ($LASTEXITCODE -ne 0) { throw 'WinGet installation failed.' }
+$taskInstallOutput = & winget install --manifest $taskDirectory --silent --scope user --location $taskInstall --disable-interactivity --accept-source-agreements --accept-package-agreements 2>&1
+$taskInstallExit = $LASTEXITCODE
+$taskInstallOutput | ForEach-Object { Write-Output $_ }
+if ($taskInstallExit -ne 0) { throw ('WinGet installation failed, exit ' + $taskInstallExit + ': ' + ($taskInstallOutput -join "`n")) }
 $taskEntry = Get-ItemProperty -LiteralPath $taskRegistry
 $taskVersion = [regex]::Match([IO.File]::ReadAllText((Join-Path $taskDirectory 'hojin-v.MiniTerm.yaml')), '(?m)^PackageVersion: (\S+)\s*$').Groups[1].Value
 if ($taskEntry.DisplayName -ne 'MiniTerm' -or $taskEntry.Publisher -ne 'MiniTerm contributors' -or $taskEntry.DisplayVersion -ne $taskVersion -or $taskEntry.InstallLocation -ine $taskInstall) { throw 'Installed Apps & Features metadata does not match the manifest.' }
@@ -35,8 +44,10 @@ $taskProcess = [Diagnostics.Process]::Start($taskStart)
 try {
     if (-not $taskProcess.WaitForExit(10000) -or $taskProcess.ExitCode -ne 0) { throw 'The installed application cannot load or reports an unexpected live session.' }
 } finally { $taskProcess.Dispose() }
-& winget uninstall --manifest $taskDirectory --silent --disable-interactivity --accept-source-agreements
-if ($LASTEXITCODE -ne 0) { throw 'WinGet removal failed.' }
+$taskRemoveOutput = & winget uninstall --manifest $taskDirectory --silent --disable-interactivity --accept-source-agreements 2>&1
+$taskRemoveExit = $LASTEXITCODE
+$taskRemoveOutput | ForEach-Object { Write-Output $_ }
+if ($taskRemoveExit -ne 0) { throw ('WinGet removal failed, exit ' + $taskRemoveExit + ': ' + ($taskRemoveOutput -join "`n")) }
 if ((Test-Path $taskRegistry) -or (Test-Path -LiteralPath $taskExe)) { throw 'WinGet removal left installed app files or the Apps & Features entry.' }
 if ((Get-FileHash -LiteralPath $taskSettings -Algorithm SHA256).Hash -ne $taskSettingsHash) { throw 'Install/removal changed saved user settings.' }
 $taskManifestHashes = Get-ChildItem -LiteralPath $taskDirectory -File -Filter '*.yaml' | Sort-Object Name | ForEach-Object { $_.Name + ':' + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
