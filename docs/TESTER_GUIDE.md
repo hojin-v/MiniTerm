@@ -4,7 +4,7 @@
 
 ## 설치
 
-1. Git for Windows와 DX12 지원 그래픽 드라이버를 준비한다.
+1. Git for Windows, DX12 지원 그래픽 드라이버, 최신 [Microsoft Visual C++ v14 x64 런타임](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)을 준비한다. 공식 페이지의 [x64 설치 파일](https://aka.ms/vc14/vc_redist.x64.exe)을 사용한다. 런타임 설치는 관리자 권한이 필요할 수 있으며 MiniTerm이 자동 설치하지 않는다.
 2. [Releases](https://github.com/hojin-v/MiniTerm/releases)에서 `MiniTerm-0.1.0-alpha.1-windows-x64-setup.exe`와 `SHA256SUMS`를 받는다. `Source code` ZIP은 실행 파일이 아니다.
 3. PowerShell의 `Get-FileHash .\MiniTerm-0.1.0-alpha.1-windows-x64-setup.exe -Algorithm SHA256` 결과를 `SHA256SUMS`의 같은 파일 항목과 비교한다.
 4. 설치본을 실행한다. 사용자별 `%LOCALAPPDATA%\Programs\MiniTerm`에 설치하며 관리자 권한은 요구하지 않는다. 설치 후 해당 폴더의 `miniterm.exe`를 실행한다.

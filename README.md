@@ -56,13 +56,13 @@ Rust 네이티브 UI와 DX12 렌더링, ConPTY를 사용합니다. 앱 실행에
 | `MiniTerm-0.1.0-alpha.1-windows-x64.zip` | 압축을 풀고 `miniterm.exe` 실행. 설치·알림 등록은 자동 수행하지 않음 |
 | `SHA256SUMS` | 다운로드 파일의 무결성 확인 |
 
-Git for Windows는 별도로 설치해야 합니다. 설치본은 서명되지 않았으며 Windows에서 게시자를 확인할 수 없다는 안내가 나올 수 있습니다. 백신을 끄거나 경고를 일괄 우회하는 방식은 안내하지 않습니다.
+Git for Windows와 [Microsoft Visual C++ v14 x64 런타임](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)을 별도로 준비해야 합니다. 실행 파일에서 `VCRUNTIME140.dll` 의존성을 확인했습니다. 설치본은 서명되지 않았으며 Windows에서 게시자를 확인할 수 없다는 안내가 나올 수 있습니다. 백신을 끄거나 경고를 일괄 우회하는 방식은 안내하지 않습니다.
 
 설정은 설치본과 ZIP 모두 `%LOCALAPPDATA%\MiniTerm\settings.json`을 사용합니다. ZIP은 설정까지 독립적인 포터블 모드가 아닙니다. 자세한 설치·업데이트·복구 절차는 [테스터 안내](docs/TESTER_GUIDE.md)를 확인하세요.
 
 ## Quick Start
 
-1. Git for Windows를 설치하고 MiniTerm 설치본 또는 ZIP을 실행합니다.
+1. Git for Windows와 Microsoft Visual C++ v14 x64 런타임을 준비하고 MiniTerm 설치본 또는 ZIP을 실행합니다.
 2. 작은 창을 클릭하고 아래 명령으로 입력과 출력을 확인합니다.
 
    ```bash

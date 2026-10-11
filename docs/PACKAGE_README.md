@@ -1,6 +1,6 @@
 # MiniTerm tester alpha
 
-Windows 11 x64와 Git for Windows가 필요합니다. `miniterm.exe`를 실행하세요. Codex·Claude Code·AI Battery는 별도 설치한 도구를 사용합니다.
+Windows 11 x64, Git for Windows, [Microsoft Visual C++ v14 x64 런타임](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)이 필요합니다. `miniterm.exe`를 실행하세요. Codex·Claude Code·AI Battery는 별도 설치한 도구를 사용합니다.
 
 시작과 시험 순서는 [TESTER_GUIDE.md](TESTER_GUIDE.md), 알려진 문제는 [RELEASE_NOTES.md](RELEASE_NOTES.md)와 [STATUS.md](STATUS.md)를 확인하세요. 이 배포에는 리사이즈 입력 누락과 미완료 성능 검증이 남아 있습니다.
 

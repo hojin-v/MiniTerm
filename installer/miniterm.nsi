@@ -12,6 +12,9 @@ Unicode true
 !ifndef RELEASE_LABEL
   !define RELEASE_LABEL "${VERSION}"
 !endif
+!ifndef RUNTIME_DLL_NAME
+  !define RUNTIME_DLL_NAME "VCRUNTIME140.dll"
+!endif
 Name "MiniTerm ${RELEASE_LABEL}"
 OutFile "${ARTIFACTS}\MiniTerm-${RELEASE_LABEL}-windows-x64-setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\MiniTerm"
@@ -49,14 +52,29 @@ Function .onInit
     SetErrorLevel 2
     Abort
   ${EndIf}
+  ${DisableX64FSRedirection}
+  IfFileExists "$SYSDIR\${RUNTIME_DLL_NAME}" runtime_present runtime_missing
+runtime_missing:
+  ${EnableX64FSRedirection}
+  IfSilent +2
+  MessageBox MB_OK|MB_ICONSTOP "Microsoft Visual C++ v14 x64 런타임을 먼저 설치해 주세요. 공식 다운로드와 절차는 TESTER_GUIDE.md에 있습니다."
+  SetErrorLevel 4
+  Abort
+runtime_present:
+  ${EnableX64FSRedirection}
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
   File /oname=miniterm-guard.exe "${ARTIFACTS}\miniterm.exe"
   ExecWait '"$PLUGINSDIR\miniterm-guard.exe" --check-update-safe' $0
-  ${If} $0 != 0
+  ${If} $0 == 3
     IfSilent +2
     MessageBox MB_OK|MB_ICONEXCLAMATION "세션을 마치고 MiniTerm을 종료한 뒤 설치해 주세요."
     SetErrorLevel 3
+    Abort
+  ${ElseIf} $0 != 0
+    IfSilent +2
+    MessageBox MB_OK|MB_ICONSTOP "MiniTerm 실행 검증에 실패했습니다. Microsoft Visual C++ v14 x64 런타임과 TESTER_GUIDE.md를 확인해 주세요."
+    SetErrorLevel 5
     Abort
   ${EndIf}
 FunctionEnd

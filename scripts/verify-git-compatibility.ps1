@@ -35,4 +35,15 @@ $taskKnownOnly = $taskExit -ne 0 -and $taskSummary.Success -and ($taskPassed + $
 $taskResult = @{recordedUtc=[DateTime]::UtcNow.ToString('o'); hostGitVersion=(& git --version); profile= $(if ($env:MINITERM_GIT_TEST_BASH) {'explicit test override'} else {'default installed Git auto detection'}); exitCode=$taskExit; passed=$taskPassed; failed=$taskFailed; failedTests=$taskNames; allPassed=$taskAllPassed; knownFailuresOnly=$taskKnownOnly; acceptedForAlpha=($taskAllPassed -or ($AllowKnownFailures -and $taskKnownOnly)); scope='Existing eight production Session/prompt/ConPTY tests. Fixed test commands; excludes GUI latency, real model/account responses and physical input. Known resize failures remain failures.'}
 [IO.File]::WriteAllText((Join-Path $taskArtifacts 'COMPATIBILITY.json'),($taskResult | ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
 $taskResult | ConvertTo-Json -Depth 5
+if ($env:GITHUB_ACTIONS -eq 'true') {
+    $taskSeverity = if (-not $taskResult.acceptedForAlpha) { 'error' } elseif (-not $taskAllPassed) { 'warning' } else { 'notice' }
+    $taskAnnotation = ($taskResult | ConvertTo-Json -Depth 5 -Compress).Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
+    Write-Output ("::$taskSeverity title=Default Git compatibility::$taskAnnotation")
+    if (-not $taskResult.acceptedForAlpha) {
+        $taskDetails = @([regex]::Matches($taskOutput,"(?s)thread '[^']+' panicked at[^\n]+\n.{0,900}") | Select-Object -First 2 | ForEach-Object { $_.Value }) -join "`n"
+        if (-not $taskDetails) { $taskDetails = $taskOutput.Substring([Math]::Max(0,$taskOutput.Length - 1200)) }
+        $taskDetails = $taskDetails.Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
+        Write-Output ("::error title=Git fixture diagnostics::$taskDetails")
+    }
+}
 if (-not $taskResult.acceptedForAlpha) { throw 'Git compatibility gate failed. Inspect artifacts/git-compatibility.log and COMPATIBILITY.json.' }

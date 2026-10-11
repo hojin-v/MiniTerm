@@ -26,6 +26,7 @@ $taskCommit = & git -C $taskRoot rev-parse HEAD
 if ($LASTEXITCODE -ne 0) { throw 'Commit the source before preparing a release package.' }
 $taskDirty = [bool](& git -C $taskRoot status --porcelain --untracked-files=normal)
 $taskInfo = @{ version=$taskVersion; releaseVersion=$taskLabel; releaseTag=$ReleaseTag; target='x86_64-pc-windows-msvc'; rust='1.90.0'; builtUtc=$taskBuild.builtUtc; packagedUtc=[DateTime]::UtcNow.ToString('o'); sourceCommit=$taskCommit; sourceDirty=$taskDirty; sourceFingerprint=$taskBuild.sourceFingerprint; executableSha256=$taskBinaryHash; cargoLockSha256=(Get-FileHash (Join-Path $taskRoot 'Cargo.lock') -Algorithm SHA256).Hash.ToLowerInvariant(); nsis='3.13'; signed=$false; channel=$taskChannel; msysCandidateBundled=$false; shell='Separately installed Git for Windows Bash'; knownIssues='STATUS.md' }
+$taskInfo.visualCppRuntime = 'Microsoft Visual C++ v14 x64 Redistributable; separately installed, VCRUNTIME140.dll required'
 [IO.File]::WriteAllText((Join-Path $taskArtifacts 'BUILD_INFO.json'),($taskInfo | ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
 Copy-Item -LiteralPath (Join-Path $taskRoot 'LICENSE') -Destination (Join-Path $taskArtifacts 'LICENSE')
 Copy-Item -LiteralPath (Join-Path $taskRoot 'docs/PACKAGE_README.md') -Destination (Join-Path $taskArtifacts 'README.md')

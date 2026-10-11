@@ -7,6 +7,8 @@ $taskManifest = Get-Content -LiteralPath (Join-Path $taskArtifacts 'RELEASE_MANI
 $taskBuild = Get-Content -LiteralPath (Join-Path $taskArtifacts 'BUILD_INFO.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $taskCompatibility = Get-Content -LiteralPath (Join-Path $taskArtifacts 'COMPATIBILITY.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $taskCommit = & git -C $taskRoot rev-parse HEAD
+$taskWorkingDirty = [bool](& git -C $taskRoot status --porcelain --untracked-files=normal)
+if ($taskWorkingDirty) { throw 'The current source working tree is dirty. Commit it and rebuild/repackage before publication.' }
 if ($LASTEXITCODE -ne 0 -or $taskManifest.releaseTag -ne $ReleaseTag -or $taskBuild.releaseTag -ne $ReleaseTag -or $taskManifest.sourceCommit -ne $taskCommit -or $taskBuild.sourceCommit -ne $taskCommit -or $taskManifest.sourceDirty -or $taskBuild.sourceDirty) { throw 'Release provenance does not match a clean committed source.' }
 if (-not $taskCompatibility.acceptedForAlpha -or $taskCompatibility.profile -ne 'default installed Git auto detection') { throw 'Default Git compatibility must be recorded and accepted for this alpha.' }
 $taskLabel = $ReleaseTag.Substring(1)
