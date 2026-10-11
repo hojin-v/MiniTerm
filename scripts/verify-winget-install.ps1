@@ -32,6 +32,9 @@ function Invoke-TestWinGet([string[]]$Arguments) {
                 $taskMore = @($taskProcesses | Where-Object { $_.ParentProcessId -in $taskOwned -and $_.ProcessId -notin $taskOwned } | Select-Object -ExpandProperty ProcessId)
                 $taskOwned += $taskMore
             } while ($taskMore.Count)
+            # ShellExecute can launch the installer through Explorer or an App Installer broker.
+            # This fresh runner had no MiniTerm at entry; include our package processes outside the parent tree.
+            $taskOwned += @($taskProcesses | Where-Object { $_.Name -match '^(miniterm(?:-guard)?|MiniTerm-.+-setup|Uninstall|smartscreen|AppInstaller)\.exe$' } | Select-Object -ExpandProperty ProcessId)
             $taskOwnedDetails = @($taskProcesses | Where-Object { $_.ProcessId -in $taskOwned } | Select-Object Name,ProcessId,ParentProcessId,CommandLine)
             Add-Type -TypeDefinition @'
 using System;
@@ -54,7 +57,7 @@ public static class MiniTermInstallerDialogs {
 }
 '@
             $taskDialogs = [MiniTermInstallerDialogs]::Read([uint32[]]$taskOwned)
-            $taskTimeoutDetails = ' Owned processes: ' + ($taskOwnedDetails | ConvertTo-Json -Compress) + ' Dialogs: ' + ($taskDialogs -join ' | ')
+            $taskTimeoutDetails = ' Owned processes: ' + ($taskOwnedDetails | ConvertTo-Json -Compress) + ' Dialogs: ' + ($taskDialogs -join ' | ') + ' Registry exists: ' + (Test-Path $taskRegistry) + ' App copied: ' + (Test-Path -LiteralPath (Join-Path $taskInstall 'miniterm.exe'))
             $taskChild.Kill($true); $taskChild.WaitForExit()
         }
         $taskText = $taskOutput.GetAwaiter().GetResult() + $taskError.GetAwaiter().GetResult()
