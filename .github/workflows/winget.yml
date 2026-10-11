@@ -22,6 +22,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  installer:
+    runs-on: windows-2025
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Verify publisher NSIS install and removal
+        run: ./scripts/verify-installer.ps1
+      - name: Native installer evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: native-installer-evidence
+          if-no-files-found: ignore
+          path: artifacts/native-installer-verification.json
+
   validate:
     runs-on: windows-2025
     timeout-minutes: 20
