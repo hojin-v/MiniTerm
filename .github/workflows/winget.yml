@@ -25,8 +25,6 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Prepare WinGet in the ephemeral runner
         shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: |
           trap {
             $taskFailure = $_.Exception.Message.Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
@@ -39,13 +37,17 @@ jobs:
             if ($LASTEXITCODE -eq 0) { $taskWingetVersion = [version]$taskVersionText.Trim().TrimStart('v') }
           }
           if ($taskWingetVersion -lt [version]'1.29.380') {
-            $taskModuleArchive = Join-Path $env:RUNNER_TEMP 'Microsoft.WinGet.Client.1.29.380.zip'
-            $taskModuleDirectory = Join-Path $env:RUNNER_TEMP 'Microsoft.WinGet.Client.1.29.380'
-            Invoke-WebRequest -Uri 'https://www.powershellgallery.com/api/v2/package/Microsoft.WinGet.Client/1.29.380' -OutFile $taskModuleArchive
-            if ((Get-FileHash -LiteralPath $taskModuleArchive -Algorithm SHA256).Hash -ine '3469E5747EB6B100E51FED3F2057386B5BA60BC8955A6669B5C2EB562E316619') { throw 'Microsoft WinGet module checksum mismatch.' }
-            Expand-Archive -LiteralPath $taskModuleArchive -DestinationPath $taskModuleDirectory
-            Import-Module (Join-Path $taskModuleDirectory 'Microsoft.WinGet.Client.psd1')
-            Repair-WinGetPackageManager -AllUsers -Version 1.29.380 -Force
+            $taskBundle = Join-Path $env:RUNNER_TEMP 'Microsoft.DesktopAppInstaller.msixbundle'
+            $taskDependencyZip = Join-Path $env:RUNNER_TEMP 'DesktopAppInstaller_Dependencies.zip'
+            $taskDependencies = Join-Path $env:RUNNER_TEMP 'DesktopAppInstaller_Dependencies'
+            $taskReleaseBase = 'https://github.com/microsoft/winget-cli/releases/download/v1.29.380/'
+            Invoke-WebRequest -Uri ($taskReleaseBase + 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle') -OutFile $taskBundle
+            Invoke-WebRequest -Uri ($taskReleaseBase + 'DesktopAppInstaller_Dependencies.zip') -OutFile $taskDependencyZip
+            if ((Get-FileHash -LiteralPath $taskBundle -Algorithm SHA256).Hash -ine '65DEA9C01CE08EE7B763366B27C0E651F97DB857C11CA9B9C301826C10092F2E' -or (Get-FileHash -LiteralPath $taskDependencyZip -Algorithm SHA256).Hash -ine 'BA875AFE9D190F61218985AC0292A99D1DB710BF93E13C68944CA9D89F0D82D1') { throw 'Microsoft WinGet release checksum mismatch.' }
+            Expand-Archive -LiteralPath $taskDependencyZip -DestinationPath $taskDependencies
+            $taskDependencyPaths = @(Get-ChildItem -LiteralPath $taskDependencies -Recurse -File | Where-Object { $_.FullName -match 'x64' -and $_.Extension -in @('.appx','.msix') } | Select-Object -ExpandProperty FullName)
+            if (-not $taskDependencyPaths.Count) { throw 'WinGet x64 dependencies are missing.' }
+            Add-AppxPackage -Path $taskBundle -DependencyPath $taskDependencyPaths -ForceApplicationShutdown -ForceUpdateFromAnyVersion
             $taskPackage = Get-AppxPackage Microsoft.DesktopAppInstaller
             if ($taskPackage) {
               $env:PATH = $taskPackage.InstallLocation + ';' + $env:PATH
