@@ -39,9 +39,12 @@ jobs:
             if ($LASTEXITCODE -eq 0) { $taskWingetVersion = [version]$taskVersionText.Trim().TrimStart('v') }
           }
           if ($taskWingetVersion -lt [version]'1.29.380') {
-            Install-PackageProvider -Name NuGet -Force | Out-Null
-            Install-Module -Name Microsoft.WinGet.Client -RequiredVersion 1.29.380 -Scope CurrentUser -Force -Repository PSGallery
-            Import-Module Microsoft.WinGet.Client
+            $taskModuleArchive = Join-Path $env:RUNNER_TEMP 'Microsoft.WinGet.Client.1.29.380.zip'
+            $taskModuleDirectory = Join-Path $env:RUNNER_TEMP 'Microsoft.WinGet.Client.1.29.380'
+            Invoke-WebRequest -Uri 'https://www.powershellgallery.com/api/v2/package/Microsoft.WinGet.Client/1.29.380' -OutFile $taskModuleArchive
+            if ((Get-FileHash -LiteralPath $taskModuleArchive -Algorithm SHA256).Hash -ine '3469E5747EB6B100E51FED3F2057386B5BA60BC8955A6669B5C2EB562E316619') { throw 'Microsoft WinGet module checksum mismatch.' }
+            Expand-Archive -LiteralPath $taskModuleArchive -DestinationPath $taskModuleDirectory
+            Import-Module (Join-Path $taskModuleDirectory 'Microsoft.WinGet.Client.psd1')
             Repair-WinGetPackageManager -AllUsers -Version 1.29.380 -Force
             $taskPackage = Get-AppxPackage Microsoft.DesktopAppInstaller
             if ($taskPackage) {
@@ -49,8 +52,9 @@ jobs:
               $taskPackage.InstallLocation | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
             }
           }
-          winget --version
-          if ($LASTEXITCODE -ne 0) { throw 'WinGet bootstrap failed.' }
+          $taskVersionText = (winget --version) -join ''
+          if ($LASTEXITCODE -ne 0 -or [version]$taskVersionText.Trim().TrimStart('v') -lt [version]'1.29.380') { throw 'WinGet bootstrap did not select the required client version.' }
+          Write-Output $taskVersionText
       - name: Validate manifest and public installer hash
         run: ./scripts/verify-winget.ps1 -VerifyInstaller
       - name: Test WinGet installation and removal
