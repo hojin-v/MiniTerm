@@ -24,10 +24,42 @@ function Invoke-TestWinGet([string[]]$Arguments) {
         $taskOutput = $taskChild.StandardOutput.ReadToEndAsync()
         $taskError = $taskChild.StandardError.ReadToEndAsync()
         $taskCompleted = $taskChild.WaitForExit(180000)
-        if (-not $taskCompleted) { $taskChild.Kill($true); $taskChild.WaitForExit() }
+        $taskTimeoutDetails = ''
+        if (-not $taskCompleted) {
+            $taskProcesses = @(Get-CimInstance Win32_Process)
+            $taskOwned = @([uint32]$taskChild.Id)
+            do {
+                $taskMore = @($taskProcesses | Where-Object { $_.ParentProcessId -in $taskOwned -and $_.ProcessId -notin $taskOwned } | Select-Object -ExpandProperty ProcessId)
+                $taskOwned += $taskMore
+            } while ($taskMore.Count)
+            $taskOwnedDetails = @($taskProcesses | Where-Object { $_.ProcessId -in $taskOwned } | Select-Object Name,ProcessId,ParentProcessId,CommandLine)
+            Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class MiniTermInstallerDialogs {
+    public delegate bool Callback(IntPtr window,IntPtr argument);
+    [DllImport("user32.dll")] static extern bool EnumWindows(Callback callback,IntPtr argument);
+    [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent,Callback callback,IntPtr argument);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr window,StringBuilder text,int count);
+    static string Text(IntPtr w) { var s=new StringBuilder(2048); GetWindowText(w,s,s.Capacity); return s.ToString(); }
+    public static string[] Read(uint[] processes) {
+        var allowed=new HashSet<uint>(processes); var result=new List<string>();
+        EnumWindows((w,a) => { uint p; GetWindowThreadProcessId(w,out p); if(allowed.Contains(p)) {
+            result.Add(p+": "+Text(w)); EnumChildWindows(w,(c,b) => { string t=Text(c); if(t.Length>0) result.Add(t); return true; },IntPtr.Zero);
+        } return true; },IntPtr.Zero); return result.ToArray();
+    }
+}
+'@
+            $taskDialogs = [MiniTermInstallerDialogs]::Read([uint32[]]$taskOwned)
+            $taskTimeoutDetails = ' Owned processes: ' + ($taskOwnedDetails | ConvertTo-Json -Compress) + ' Dialogs: ' + ($taskDialogs -join ' | ')
+            $taskChild.Kill($true); $taskChild.WaitForExit()
+        }
         $taskText = $taskOutput.GetAwaiter().GetResult() + $taskError.GetAwaiter().GetResult()
         Write-Output $taskText
-        if (-not $taskCompleted) { throw ('WinGet ' + $Arguments[0] + ' timed out after 180 seconds: ' + $taskText) }
+        if (-not $taskCompleted) { throw ('WinGet ' + $Arguments[0] + ' timed out after 180 seconds: ' + $taskText + $taskTimeoutDetails) }
         if ($taskChild.ExitCode -ne 0) { throw ('WinGet ' + $Arguments[0] + ' failed, exit ' + $taskChild.ExitCode + ': ' + $taskText) }
     } finally { $taskChild.Dispose() }
 }
