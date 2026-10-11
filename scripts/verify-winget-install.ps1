@@ -56,4 +56,5 @@ try { $taskManifestHash = [BitConverter]::ToString($taskHasher.ComputeHash([Text
 $taskResult = @{ packageIdentifier='hojin-v.MiniTerm'; packageVersion=$taskEntry.DisplayVersion; manifestSha256=$taskManifestHash; sourceCommit=$env:GITHUB_SHA; installed=$true; uninstalled=$true; settingsPreserved=$true; executableLoaded=$true; scope='WinGet local-manifest install with package dependencies and removal on an ephemeral Windows runner. No physical GUI, IME, account or model validation.' }
 New-Item -ItemType Directory -Path (Join-Path $taskRoot 'artifacts') -Force | Out-Null
 [IO.File]::WriteAllText((Join-Path $taskRoot 'artifacts/winget-install-verification.json'), ($taskResult | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+Write-Output ('::notice title=WinGet installation verified::' + ($taskResult | ConvertTo-Json -Compress))
 $taskResult | ConvertTo-Json

@@ -25,15 +25,27 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Prepare WinGet in the ephemeral runner
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+          trap {
+            $taskFailure = $_.Exception.Message.Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
+            Write-Output ('::error title=WinGet bootstrap::' + $taskFailure)
+            throw
+          }
+          $taskWingetVersion = [version]'0.0.0'
+          if (Get-Command winget -ErrorAction SilentlyContinue) {
+            $taskVersionText = (winget --version) -join ''
+            if ($LASTEXITCODE -eq 0) { $taskWingetVersion = [version]$taskVersionText.Trim().TrimStart('v') }
+          }
+          if ($taskWingetVersion -lt [version]'1.29.380') {
             Install-PackageProvider -Name NuGet -Force | Out-Null
             Install-Module -Name Microsoft.WinGet.Client -RequiredVersion 1.29.380 -Scope CurrentUser -Force -Repository PSGallery
             Import-Module Microsoft.WinGet.Client
-            Repair-WinGetPackageManager -AllUsers
+            Repair-WinGetPackageManager -AllUsers -Version 1.29.380 -Force
             $taskPackage = Get-AppxPackage Microsoft.DesktopAppInstaller
             if ($taskPackage) {
-              $env:PATH += ';' + $taskPackage.InstallLocation
+              $env:PATH = $taskPackage.InstallLocation + ';' + $env:PATH
               $taskPackage.InstallLocation | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
             }
           }
