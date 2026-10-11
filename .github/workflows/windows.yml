@@ -36,6 +36,9 @@ jobs:
         shell: pwsh
         run: |
           $env:MINITERM_INSTANCE_ID = [guid]::NewGuid().ToString()
+          $env:MINITERM_DIAGNOSTICS = '1'
+          $env:MINITERM_DATA_DIR = Join-Path $env:GITHUB_WORKSPACE ('artifacts/ipc-' + $env:MINITERM_INSTANCE_ID)
+          New-Item -ItemType Directory -Path $env:MINITERM_DATA_DIR -Force | Out-Null
           cargo test --locked --lib ipc::tests::real_pipe -- --ignored --nocapture --test-threads=1
       - name: Default Git compatibility (only documented alpha failures allowed)
         run: ./scripts/verify-git-compatibility.ps1 -AllowKnownFailures

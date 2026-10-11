@@ -46,6 +46,12 @@ foreach ($taskFile in $taskManifest.files) {
     $taskUploaded = Invoke-RestMethod -Method Post -Uri ($taskUploadBase + '?name=' + [Uri]::EscapeDataString($taskFile.name)) -Headers $taskHeaders -ContentType 'application/octet-stream' -InFile (Join-Path $taskArtifacts $taskFile.name)
     if ($taskUploaded.state -ne 'uploaded' -or $taskUploaded.size -ne $taskFile.bytes -or ($taskUploaded.digest -and $taskUploaded.digest -ne ('sha256:' + $taskFile.sha256))) { throw "Upload verification failed: $($taskFile.name). Draft remains unpublished." }
 }
+$taskCompleteDraft = Invoke-RestMethod -Uri ($taskApi + '/' + $taskRelease.id) -Headers $taskHeaders
+if (@($taskCompleteDraft.assets).Count -ne $taskExpected.Count) { throw 'Draft contains missing or unexpected assets. It remains unpublished.' }
+foreach ($taskFile in $taskManifest.files) {
+    $taskAsset = @($taskCompleteDraft.assets | Where-Object { $_.name -eq $taskFile.name })
+    if ($taskAsset.Count -ne 1 -or $taskAsset[0].size -ne $taskFile.bytes -or $taskAsset[0].digest -ne ('sha256:' + $taskFile.sha256)) { throw 'Draft asset verification is incomplete. It remains unpublished.' }
+}
 $taskPublishBody = @{draft=$false;prerelease=$true;make_latest='false'} | ConvertTo-Json
 $taskPublished = Invoke-RestMethod -Method Patch -Uri ($taskApi + '/' + $taskRelease.id) -Headers $taskHeaders -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($taskPublishBody))
 if ($taskPublished.draft -or -not $taskPublished.prerelease -or @($taskPublished.assets).Count -ne $taskExpected.Count) { throw 'Final prerelease verification failed.' }
