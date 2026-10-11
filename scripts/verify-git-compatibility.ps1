@@ -28,7 +28,7 @@ $taskSummary = [regex]::Match($taskOutput,'test result: (?:ok|FAILED)\. (\d+) pa
 $taskPassed = if ($taskSummary.Success) { [int]$taskSummary.Groups[1].Value } else { 0 }
 $taskFailed = if ($taskSummary.Success) { [int]$taskSummary.Groups[2].Value } else { 0 }
 $taskNames = @([regex]::Matches($taskOutput,'(?m)^    ([a-z][a-z0-9_]+)\r?$') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
-$taskKnown = @('bash_managed_prompt_resize_preserves_typeahead','git_session_input_after_resize_preserves_commands_and_ansi_styles','git_session_vertical_resize_preserves_input_and_styles')
+$taskKnown = @('bash_managed_prompt_resize_preserves_typeahead','bash_resize_immediate_typeahead_preserves_commands','git_session_input_after_resize_preserves_commands_and_ansi_styles','git_session_vertical_resize_preserves_input_and_styles')
 $taskUnknown = @($taskNames | Where-Object { $_ -notin $taskKnown })
 $taskAllPassed = $taskExit -eq 0 -and $taskPassed -eq 8 -and $taskFailed -eq 0
 $taskKnownOnly = $taskExit -ne 0 -and $taskSummary.Success -and ($taskPassed + $taskFailed) -eq 8 -and $taskFailed -gt 0 -and $taskNames.Count -eq $taskFailed -and $taskUnknown.Count -eq 0
@@ -40,7 +40,7 @@ if ($env:GITHUB_ACTIONS -eq 'true') {
     $taskAnnotation = ($taskResult | ConvertTo-Json -Depth 5 -Compress).Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
     Write-Output ("::$taskSeverity title=Default Git compatibility::$taskAnnotation")
     if (-not $taskResult.acceptedForAlpha) {
-        $taskDetails = @([regex]::Matches($taskOutput,"(?s)thread '[^']+' panicked at[^\n]+\n.{0,900}") | Select-Object -First 2 | ForEach-Object { $_.Value }) -join "`n"
+        $taskDetails = @([regex]::Matches($taskOutput,"(?s)thread '[^']+' panicked at[^\n]+\n.{0,900}") | Select-Object -First 8 | ForEach-Object { $_.Value }) -join "`n"
         if (-not $taskDetails) { $taskDetails = $taskOutput.Substring([Math]::Max(0,$taskOutput.Length - 1200)) }
         $taskDetails = $taskDetails.Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
         Write-Output ("::error title=Git fixture diagnostics::$taskDetails")

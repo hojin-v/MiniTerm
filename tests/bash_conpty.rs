@@ -38,7 +38,9 @@ impl Harness {
         let mut harness = Self::spawn(profile, id, None);
         harness.send("HISTFILE=/dev/null; HISTSIZE=0; PS1='__MINI''TERM_PROMPT__ '; printf '__MINI''TERM_READY__\\n'\r");
         harness.until("__MINITERM_READY__");
-        harness.until("__MINITERM_PROMPT__ ");
+        // ConPTY may encode the trailing prompt blank as CSI 1 C.
+        // The stable identifier proves prompt arrival without a raw-space assumption.
+        harness.until("__MINITERM_PROMPT__");
         harness
     }
 
@@ -676,7 +678,7 @@ fn bash_state_unicode_tty_resize_and_interrupt() {
         let output = shell.until("__SET_OK__");
         assert!(output.contains("__TTY_OK__"), "{output:?}");
         assert!(output.contains("__CWD_OK__"), "{output:?}");
-        shell.until("__MINITERM_PROMPT__ ");
+        shell.until("__MINITERM_PROMPT__");
         shell.master.resize(pty::size(120, 30).unwrap()).unwrap();
         shell.send("[[ $MINI_STATE == kept ]] && printf '__STATE''_OK__\\n'; printf '%s\\n' 한글 | cat; printf '__PIPE''_OK__\\n'\r");
         let output = shell.until("__PIPE_OK__");
@@ -684,19 +686,19 @@ fn bash_state_unicode_tty_resize_and_interrupt() {
         assert!(output.contains("한글"));
         assert_eq!(shell.child.process_id(), pid);
         assert_eq!(shell.master.get_size().unwrap().cols, 120);
-        shell.until("__MINITERM_PROMPT__ ");
+        shell.until("__MINITERM_PROMPT__");
         shell.send("sleep 20\r");
         thread::sleep(Duration::from_millis(150));
         shell.send("\x03");
         // Wait for the new prompt: terminals flush queued typeahead when processing Ctrl+C.
-        shell.until("__MINITERM_PROMPT__ ");
+        shell.until("__MINITERM_PROMPT__");
         shell.send("printf '__CTRL''_C_OK__\\n'\r");
         shell.until("__CTRL_C_OK__");
-        shell.until("__MINITERM_PROMPT__ ");
+        shell.until("__MINITERM_PROMPT__");
         shell.send("sleep 20\r");
         thread::sleep(Duration::from_millis(150));
         shell.send("\x1a");
-        let output = shell.until("__MINITERM_PROMPT__ ");
+        let output = shell.until("__MINITERM_PROMPT__");
         assert!(
             output.contains("Stopped"),
             "Ctrl+Z must suspend the foreground job: {output:?}"
@@ -704,7 +706,7 @@ fn bash_state_unicode_tty_resize_and_interrupt() {
         shell.send("jobs; bg; fg\r");
         thread::sleep(Duration::from_millis(150));
         shell.send("\x03");
-        shell.until("__MINITERM_PROMPT__ ");
+        shell.until("__MINITERM_PROMPT__");
         shell.send("printf '\\033[?1049hALT\\033[?1049l'; printf '__ALT''_OK__\\n'\r");
         shell.until("__ALT_OK__");
     }
@@ -728,7 +730,7 @@ fn conpty_round_trip_100_samples() {
         let start = Instant::now();
         shell.send(&format!("printf '__ROUND''_TRIP_{index}__\\n'\r"));
         shell.until(&marker);
-        shell.until("__MINITERM_PROMPT__ ");
+        shell.until("__MINITERM_PROMPT__");
         samples.push(start.elapsed().as_secs_f64() * 1000.0);
     }
     samples.sort_by(f64::total_cmp);
@@ -762,29 +764,29 @@ fn wsl_home_environment_resize_job_control_and_windows_interop() {
         output.contains("filesystem=ext2/ext3"),
         "WSL home should use the Linux filesystem: {output:?}"
     );
-    shell.until("__MINITERM_PROMPT__ ");
+    shell.until("__MINITERM_PROMPT__");
     shell.send("\"$MINITERM_NOTIFY_EXE\" --list; [[ $? == 0 ]] && printf '__WIN32''_INTEROP_OK__\\n'; printf '__INTEROP''_DONE__\\n'\r");
     let output = shell.until("__INTEROP_DONE__");
     assert!(
         output.contains("__WIN32_INTEROP_OK__"),
         "Windows helper invocation through WSL interop: {output:?}"
     );
-    shell.until("__MINITERM_PROMPT__ ");
+    shell.until("__MINITERM_PROMPT__");
     shell.master.resize(pty::size(120, 30).unwrap()).unwrap();
     shell.send("printf 'size='; stty size; printf '__SIZE''_OK__\\n'\r");
     let output = shell.until("__SIZE_OK__");
     assert!(output.contains("30 120"), "{output:?}");
     assert_eq!(shell.child.process_id(), pid);
-    shell.until("__MINITERM_PROMPT__ ");
+    shell.until("__MINITERM_PROMPT__");
     shell.send("sleep 20\r");
     thread::sleep(Duration::from_millis(150));
     shell.send("\x1a");
-    let output = shell.until("__MINITERM_PROMPT__ ");
+    let output = shell.until("__MINITERM_PROMPT__");
     assert!(output.contains("Stopped"), "{output:?}");
     shell.send("jobs; bg; fg\r");
     thread::sleep(Duration::from_millis(150));
     shell.send("\x03");
-    shell.until("__MINITERM_PROMPT__ ");
+    shell.until("__MINITERM_PROMPT__");
     shell.send("printf '__INTERRUPT''_OK__\\n'\r");
     shell.until("__INTERRUPT_OK__");
 }
