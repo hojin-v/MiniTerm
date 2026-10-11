@@ -2,6 +2,8 @@
 
 패키지 ID는 **`hojin-v.MiniTerm`**이다. 현재 `0.1.0-alpha.1`의 제출용 매니페스트를 준비했다. Microsoft `winget-pkgs`의 등록 PR이 병합되고 카탈로그에 반영되기 전에는 일반 검색·설치를 제공한다고 표시하지 않는다. 매니페스트를 이 저장소에 올리는 것만으로 공식 등록이 완료되지는 않는다.
 
+매니페스트·공개 설치 파일 해시 검증은 통과했다. 임시 CI의 로컬 매니페스트 설치는 SmartScreen 확인 단계에서 대기해 완료하지 못했다. 설치 프로그램의 `/S` 동작은 별도 기능 검사로 확인하고, WinGet 설치의 통과 여부는 따로 기록한다. 현재 GitHub CLI 인증도 없어 등록 PR을 아직 제출하지 않았다.
+
 ## 등록 후 설치·업데이트·제거
 
 ```powershell
@@ -30,6 +32,8 @@ Windows 11 x64가 필요하다. MiniTerm은 사용자별 설치이고, Git·Visu
 ```
 
 첫 명령은 매니페스트와 다운로드 해시를 확인한다. 두 번째는 이미 공개된 릴리스에서 제출용 파일을 `artifacts/winget/`에 만든다. 검사 목적으로 개발 장치에 앱을 재설치하거나 WinGet 설정을 변경하지 않는다. 별도 `WinGet package validation` CI는 임시 Windows 장치에서 실제 `winget install --manifest`와 제거·설정 보존을 확인한다. 이 CI의 로컬 매니페스트 기능 활성화는 일반 사용자 설치에 필요하지 않다.
+
+미등록 로컬 매니페스트와 공식 카탈로그는 WinGet의 신뢰 처리 경로가 다르다. Microsoft의 [다운로드 처리 구현](https://github.com/microsoft/winget-cli/blob/master/src/AppInstallerCLICore/Workflows/DownloadFlow.cpp)은 신뢰하는 소스의 해시 일치 파일과 로컬 파일을 구분한다. CI의 보안 확인 대기를 카탈로그 설치 성공으로 표시하지 않는다. Microsoft의 검증과 실제 카탈로그 설치 확인이 남아 있다.
 
 ## 공식 등록
 

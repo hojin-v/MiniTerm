@@ -6,11 +6,13 @@ on:
     paths:
       - 'winget/**'
       - 'scripts/*winget*.ps1'
+      - 'scripts/verify-installer.ps1'
       - '.github/workflows/winget.yml'
   pull_request:
     paths:
       - 'winget/**'
       - 'scripts/*winget*.ps1'
+      - 'scripts/verify-installer.ps1'
       - '.github/workflows/winget.yml'
   workflow_dispatch:
 
