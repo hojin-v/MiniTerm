@@ -1,0 +1,4 @@
+interface:
+  display_name: "MiniTerm Progress"
+  short_description: "Report task plans and progress to the MiniTerm summary"
+  default_prompt: "Use $miniterm-progress to report the current task and plan progress while working in MiniTerm."

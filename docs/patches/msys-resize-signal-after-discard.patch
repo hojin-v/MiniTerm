@@ -1,0 +1,127 @@
+diff --git a/winsup/cygwin/fhandler/console.cc b/winsup/cygwin/fhandler/console.cc
+index 48c9326..8bfa1ed 100644
+--- a/winsup/cygwin/fhandler/console.cc
++++ b/winsup/cygwin/fhandler/console.cc
+@@ -55,6 +55,19 @@ static int NO_COPY shared_info_state[MAX_CONS_DEV];
+ #define CONS_THREAD_SYNC "cygcons.thread_sync"
+ static bool NO_COPY master_thread_started = false;
+ 
++/* Called with input_mutex held. Geometry queries and output refresh
++   con.dwWinSize independently, so use the shared tty size to remember
++   what was last reported to the foreground process group. */
++static bool
++console_window_size_changed (tty_min *ttyp, COORD size)
++{
++  if (ttyp->winsize.ws_row == size.Y && ttyp->winsize.ws_col == size.X)
++    return false;
++  ttyp->winsize.ws_row = size.Y;
++  ttyp->winsize.ws_col = size.X;
++  return true;
++}
++
+ const unsigned fhandler_console::MAX_WRITE_CHARS = 16384;
+ 
+ fhandler_console::console_state NO_COPY
+@@ -479,10 +492,8 @@ fhandler_console::cons_master_thread (handle_set_t *p, tty *ttyp)
+ 	 Therefore, check windows size every time here. */
+       if (!wincap.has_con_24bit_colors () || con_is_legacy)
+ 	{
+-	  SHORT y = con.dwWinSize.Y;
+-	  SHORT x = con.dwWinSize.X;
+ 	  con.fillin (p->output_handle);
+-	  if (y != con.dwWinSize.Y || x != con.dwWinSize.X)
++	  if (console_window_size_changed (ttyp, con.dwWinSize))
+ 	    {
+ 	      con.scroll_region.Top = 0;
+ 	      con.scroll_region.Bottom = -1;
+@@ -520,10 +531,8 @@ fhandler_console::cons_master_thread (handle_set_t *p, tty *ttyp)
+ 	      processed = process_stop_start (c, ttyp);
+ 	      break;
+ 	    case WINDOW_BUFFER_SIZE_EVENT:
+-	      SHORT y = con.dwWinSize.Y;
+-	      SHORT x = con.dwWinSize.X;
+ 	      con.fillin (p->output_handle);
+-	      if (y != con.dwWinSize.Y || x != con.dwWinSize.X)
++	      if (console_window_size_changed (ttyp, con.dwWinSize))
+ 		{
+ 		  con.scroll_region.Top = 0;
+ 		  con.scroll_region.Bottom = -1;
+@@ -1058,11 +1067,9 @@ fhandler_console::fix_tab_position (HANDLE h, DWORD owner)
+ bool
+ fhandler_console::send_winch_maybe ()
+ {
+-  SHORT y = con.dwWinSize.Y;
+-  SHORT x = con.dwWinSize.X;
+   con.fillin (get_output_handle ());
+ 
+-  if (y != con.dwWinSize.Y || x != con.dwWinSize.X)
++  if (console_window_size_changed (get_ttyp (), con.dwWinSize))
+     {
+       con.scroll_region.Top = 0;
+       con.scroll_region.Bottom = -1;
+@@ -1259,6 +1266,7 @@ fhandler_console::process_input_message (void)
+   termios *ti = &(get_ttyp ()->ti);
+ 
+   fhandler_console::input_states stat = input_processing;
++  bool notify_resize_after_discard = false;
+   DWORD total_read, i;
+   INPUT_RECORD input_rec[INREC_SIZE];
+ 
+@@ -1616,12 +1624,21 @@ fhandler_console::process_input_message (void)
+ 	  break;
+ 
+ 	case WINDOW_BUFFER_SIZE_EVENT:
+-	  if (send_winch_maybe ())
+-	    {
+-	      stat = input_winch;
+-	      goto out;
+-	    }
+-	  /* fall through */
++	  {
++	    /* Queries/output may already have refreshed con.dwWinSize.
++	       Compare with the last size reported under input_mutex. */
++	    con.fillin (get_output_handle ());
++	    notify_resize_after_discard =
++	      console_window_size_changed (get_ttyp (), con.dwWinSize);
++	    if (!notify_resize_after_discard)
++	      continue;
++	    con.scroll_region.Top = 0;
++	    con.scroll_region.Bottom = -1;
++	    if (wincap.has_con_24bit_colors () && !con_is_legacy
++		&& wincap.has_con_broken_tabs ())
++	      fix_tab_position (get_output_handle (), con.owner);
++	    goto out;
++	  }
+ 	default:
+ 	  continue;
+ 	}
+@@ -1661,6 +1678,15 @@ out:
+       release_attach_mutex ();
+       con.num_processed -= min (con.num_processed, discarded);
+     }
++  /* SIGWINCH releases input_mutex. Consume the peeked record first so
++     another console master cannot remove it before our discard. */
++  if (notify_resize_after_discard)
++    {
++      release_input_mutex ();
++      get_ttyp ()->kill_pgrp (SIGWINCH);
++      acquire_input_mutex (mutex_timeout);
++      stat = input_winch;
++    }
+   return stat;
+ }
+ 
+@@ -1844,6 +1870,13 @@ fhandler_console::open (int flags, mode_t)
+ 
+   if (con.fillin (get_output_handle ()))
+     {
++      acquire_input_mutex (mutex_timeout);
++      if (!get_ttyp ()->winsize.ws_row || !get_ttyp ()->winsize.ws_col)
++	{
++	  get_ttyp ()->winsize.ws_row = con.dwWinSize.Y;
++	  get_ttyp ()->winsize.ws_col = con.dwWinSize.X;
++	}
++      release_input_mutex ();
+       con.current_win32_attr = con.b.wAttributes;
+       if (!con.default_color)
+ 	con.default_color = con.b.wAttributes;

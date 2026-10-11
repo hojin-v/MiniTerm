@@ -1,0 +1,93 @@
+name: Windows native checks and tester alpha
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*-alpha.*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-2025
+    timeout-minutes: 40
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}\.tools\target
+      MINITERM_RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@4aab473fa1157d90c6dc14f879ca54797e16fea0 # 1.90.0
+        with:
+          toolchain: 1.90.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: ". -> .tools/target"
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Logic tests
+        run: cargo test --locked
+      - name: Isolated IPC
+        shell: pwsh
+        run: |
+          $env:MINITERM_INSTANCE_ID = [guid]::NewGuid().ToString()
+          cargo test --locked --lib ipc::tests::real_pipe -- --ignored --nocapture --test-threads=1
+      - name: Default Git compatibility (only documented alpha failures allowed)
+        run: ./scripts/verify-git-compatibility.ps1 -AllowKnownFailures
+      - name: Build
+        run: ./scripts/build.ps1
+      - name: Package
+        run: ./scripts/package.ps1 -SkipBuild -ReleaseTag $env:MINITERM_RELEASE_TAG
+      - name: Validate release manifest
+        if: startsWith(github.ref, 'refs/tags/')
+        run: ./scripts/publish-alpha.ps1 -ReleaseTag $env:MINITERM_RELEASE_TAG -ValidateOnly
+      - name: Compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: git-compatibility-evidence
+          if-no-files-found: ignore
+          path: |
+            artifacts/COMPATIBILITY.json
+            artifacts/git-compatibility.log
+      - name: Package artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: miniterm-windows-x64-alpha
+          if-no-files-found: error
+          path: |
+            artifacts/miniterm.exe
+            artifacts/MiniTerm-*-windows-x64-setup.exe
+            artifacts/MiniTerm-*-windows-x64.zip
+            artifacts/BUILD_INFO.json
+            artifacts/RELEASE_MANIFEST.json
+            artifacts/SHA256SUMS
+            artifacts/THIRD_PARTY_NOTICES.html
+            artifacts/TESTER_GUIDE.md
+            artifacts/RELEASE_NOTES.md
+            artifacts/STATUS.md
+            artifacts/COMPATIBILITY.json
+
+  publish:
+    needs: check
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: miniterm-windows-x64-alpha
+          path: artifacts
+      - name: Publish complete prerelease
+        run: ./scripts/publish-alpha.ps1 -ReleaseTag $env:MINITERM_RELEASE_TAG
+        env:
+          MINITERM_RELEASE_TAG: ${{ github.ref_name }}
+          GITHUB_TOKEN: ${{ github.token }}

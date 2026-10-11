@@ -1,0 +1,30 @@
+[package]
+name = "miniterm"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+description = "A native GPU-rendered persistent Bash HUD for Windows"
+license = "MIT"
+
+[dependencies]
+eframe = { version = "=0.33.3", default-features = false, features = ["default_fonts", "wgpu"] }
+egui = "=0.33.3"
+wgpu = { version = "27", default-features = false, features = ["dx12", "wgsl"] }
+alacritty_terminal = "=0.25.1"
+portable-pty = "=0.9.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+winreg = "0.55"
+tray-icon = "0.21"
+raw-window-handle = "0.6"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Pipes", "Win32_System_IO", "Win32_System_Memory"] }
+windows = { version = "=0.62.2", features = ["Data_Xml_Dom", "UI_Notifications", "Win32_System_Com", "Win32_UI_Notifications", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem", "Win32_System_Com_StructuredStorage", "Win32_System_Variant"] }
+toml_edit = "0.23"
+windows-core = "=0.62.2"
+ttf-parser = "=0.25.1"
+
+[profile.release]
+lto = "thin"
+strip = true
+codegen-units = 1

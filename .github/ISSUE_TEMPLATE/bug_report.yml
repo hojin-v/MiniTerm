@@ -1,0 +1,30 @@
+name: Tester bug report
+description: Report a MiniTerm alpha issue with steps and environment details.
+title: "[Bug] "
+body:
+  - type: input
+    id: version
+    attributes:
+      label: MiniTerm release
+      placeholder: v0.1.0-alpha.1
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Windows build, Git/Bash version, font, display scaling, and agent/AI Battery version when relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps, expected result, and actual result
+      description: Use a harmless sample command where possible. Include frequency and whether it occurs after resizing.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshot or short output excerpt
+      description: Remove tokens, personal paths, account information, and private prompts before attaching. Full terminal/session logs are not needed.
