@@ -2,7 +2,7 @@
 
 패키지 ID는 **`hojin-v.MiniTerm`**이다. 현재 `0.1.0-alpha.1`의 제출용 매니페스트를 준비했다. Microsoft `winget-pkgs`의 등록 PR이 병합되고 카탈로그에 반영되기 전에는 일반 검색·설치를 제공한다고 표시하지 않는다. 매니페스트를 이 저장소에 올리는 것만으로 공식 등록이 완료되지는 않는다.
 
-매니페스트·공개 설치 파일 해시 검증은 통과했다. 임시 CI의 로컬 매니페스트 설치는 SmartScreen 확인 단계에서 대기해 완료하지 못했다. 설치 프로그램의 `/S` 동작은 별도 기능 검사로 확인하고, WinGet 설치의 통과 여부는 따로 기록한다. 현재 GitHub CLI 인증도 없어 등록 PR을 아직 제출하지 않았다.
+매니페스트·공개 설치 파일 해시 검증은 통과했다. 임시 CI의 로컬 매니페스트 설치는 SmartScreen 확인 단계에서 대기해 완료하지 못했다. 별도 `/S` 기능 검사에서는 공개 설치본의 설치·앱 로딩·제거·설정 보존을 확인했다. 현재 GitHub CLI 인증도 없어 등록 PR을 아직 제출하지 않았다.
 
 ## 등록 후 설치·업데이트·제거
 
@@ -44,6 +44,8 @@ Windows 11 x64가 필요하다. MiniTerm은 사용자별 설치이고, Git·Visu
 5. 병합과 카탈로그 반영 후 `winget show --id hojin-v.MiniTerm --exact --source winget`으로 등록을 확인하고 README의 상태를 갱신한다.
 
 GitHub CLI 로그인과 WinGet CI 성공 후 `./scripts/submit-winget.ps1`로 제출할 수 있다. 도구는 열린 중복 PR을 확인하고, 계정의 fork에 새 브랜치를 만들어 네 파일만 제출한다. 기존 fork의 브랜치를 덮어쓰지 않는다. `-ValidateOnly`는 제출 내용을 확인하며 GitHub 인증·fork·PR 생성을 수행하지 않는다.
+
+독립 설치 검사가 통과했지만 로컬 WinGet 검증이 미완료이면 `./scripts/submit-winget.ps1 -Draft`로 검토용 PR을 준비할 수 있다. 이 경우 검사한 매니페스트의 해시를 대조하고, WinGet 설치 항목은 미완료로 표시하며 SmartScreen 대기와 검증 범위를 본문에 적는다. Draft 생성은 공식 카탈로그 등록 완료가 아니다. 검증을 마치고 일반 PR로 전환한 뒤 Microsoft의 승인·병합·카탈로그 반영을 확인해야 한다.
 
 후속 버전은 새 GitHub Release를 먼저 공개하고 `prepare-winget.ps1`로 새 버전의 해시를 확인한 뒤 별도 업데이트 PR로 제출한다. 이미 게시한 설치 파일·태그·해시를 바꾸지 않는다. 공개 릴리스와 공식 카탈로그는 별도의 배포 단계다.
 

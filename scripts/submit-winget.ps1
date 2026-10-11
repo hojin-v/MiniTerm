@@ -1,7 +1,8 @@
 param(
     [string]$ManifestDirectory = 'winget/manifests/h/hojin-v/MiniTerm/0.1.0-alpha.1',
     [string]$GhPath = '',
-    [switch]$ValidateOnly
+    [switch]$ValidateOnly,
+    [switch]$Draft
 )
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSScriptRoot
@@ -18,7 +19,7 @@ $taskArtifacts = Join-Path $taskRoot 'artifacts/winget-preparation'
 New-Item -ItemType Directory -Path $taskArtifacts -Force | Out-Null
 $taskBodyPath = Join-Path $taskArtifacts 'pull-request.md'
 [IO.File]::WriteAllText($taskBodyPath, $taskBody, [Text.UTF8Encoding]::new($false))
-if ($ValidateOnly) { Write-Output "$taskTitle; four manifests; PR body: $taskBodyPath. No fork or PR created."; return }
+if ($ValidateOnly) { Write-Output "$taskTitle; four manifests; draft=$([bool]$Draft); PR body: $taskBodyPath. No fork or PR created."; return }
 if (-not $GhPath) {
     $taskGhCommand = Get-Command gh -ErrorAction SilentlyContinue
     $GhPath = if ($taskGhCommand) { $taskGhCommand.Source } else { Join-Path $taskRoot '.tools/github-cli/bin/gh.exe' }
@@ -43,16 +44,24 @@ if ($taskDuplicates.Count) { Write-Output ('An open registration PR already exis
 $taskBody = $taskBody.Replace('- [ ] Checked that there aren''t other open pull requests', '- [x] Checked that there aren''t other open pull requests')
 $taskCiHeaders = @{Accept='application/vnd.github+json';'User-Agent'='MiniTerm-winget-submission'}
 $taskCi = Invoke-RestMethod -Uri 'https://api.github.com/repos/hojin-v/MiniTerm/actions/workflows/winget.yml/runs?branch=main&per_page=1' -Headers $taskCiHeaders
-if (-not $taskCi.workflow_runs.Count -or $taskCi.workflow_runs[0].conclusion -ne 'success') { throw 'WinGet install/removal CI must succeed before registration is submitted.' }
+if (-not $taskCi.workflow_runs.Count -or $taskCi.workflow_runs[0].status -ne 'completed') { throw 'Package validation CI must finish before submission.' }
+if (-not $Draft -and $taskCi.workflow_runs[0].conclusion -ne 'success') { throw 'WinGet install/removal CI must succeed for a non-draft registration PR. A draft may disclose incomplete WinGet testing after the independent installer test passes.' }
 $taskEvidenceDirectory = Join-Path $taskArtifacts ('ci-evidence-' + [guid]::NewGuid().ToString())
-& $GhPath run download $taskCi.workflow_runs[0].id --repo hojin-v/MiniTerm --name winget-installation-evidence --dir $taskEvidenceDirectory
+$taskEvidenceName = if ($Draft) { 'native-installer-evidence' } else { 'winget-installation-evidence' }
+$taskEvidenceFile = if ($Draft) { 'native-installer-verification.json' } else { 'winget-install-verification.json' }
+& $GhPath run download $taskCi.workflow_runs[0].id --repo hojin-v/MiniTerm --name $taskEvidenceName --dir $taskEvidenceDirectory
 if ($LASTEXITCODE -ne 0) { throw 'Cannot verify WinGet installation evidence.' }
-$taskEvidence = Get-Content -LiteralPath (Join-Path $taskEvidenceDirectory 'winget-install-verification.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$taskEvidence = Get-Content -LiteralPath (Join-Path $taskEvidenceDirectory $taskEvidenceFile) -Raw -Encoding UTF8 | ConvertFrom-Json
 $taskManifestHashes = $taskFiles | Sort-Object Name | ForEach-Object { $_.Name + ':' + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
 $taskHasher = [Security.Cryptography.SHA256]::Create()
 try { $taskManifestHash = [BitConverter]::ToString($taskHasher.ComputeHash([Text.Encoding]::UTF8.GetBytes(($taskManifestHashes -join "`n") + "`n"))).Replace('-', '').ToLowerInvariant() } finally { $taskHasher.Dispose() }
-if ($taskEvidence.packageVersion -ne $taskVersion -or $taskEvidence.manifestSha256 -ne $taskManifestHash -or -not $taskEvidence.installed -or -not $taskEvidence.uninstalled -or -not $taskEvidence.settingsPreserved -or -not $taskEvidence.executableLoaded) { throw 'CI evidence does not prove installation/removal of these exact manifests.' }
-$taskBody = $taskBody.Replace('- [ ] Tested with `winget install', '- [x] Tested with `winget install') + "`n`nInstallation validation: " + $taskCi.workflow_runs[0].html_url + "`n"
+if ($taskEvidence.packageIdentifier -ne 'hojin-v.MiniTerm' -or $taskEvidence.packageVersion -ne $taskVersion -or $taskEvidence.manifestSha256 -ne $taskManifestHash -or -not $taskEvidence.installed -or -not $taskEvidence.uninstalled -or -not $taskEvidence.settingsPreserved -or -not $taskEvidence.executableLoaded) { throw 'CI evidence does not match these manifests and the required installer behavior.' }
+if ($Draft) {
+    $taskBody += "`n`nDraft validation status: the hash-verified publisher NSIS installer passed unattended installation, executable loading, removal and settings preservation. Local WinGet installation in headless CI waited at SmartScreen before the installer started; WinGet installation is not marked passed. Catalog validation and Microsoft review remain pending.`n"
+} else {
+    $taskBody = $taskBody.Replace('- [ ] Tested with `winget install', '- [x] Tested with `winget install')
+}
+$taskBody += "`nInstallation validation: " + $taskCi.workflow_runs[0].html_url + "`n"
 [IO.File]::WriteAllText($taskBodyPath, $taskBody, [Text.UTF8Encoding]::new($false))
 & $GhPath repo fork microsoft/winget-pkgs --clone=false
 if ($LASTEXITCODE -ne 0) { throw 'Could not create or find the community repository fork.' }
@@ -72,7 +81,7 @@ $taskAuthor = @{name=$taskUser.login;email=([string]$taskUser.id + '+' + $taskUs
 $taskCommit = Post-GhJson ('repos/' + $taskFork + '/git/commits') @{message=$taskTitle;tree=$taskTree.sha;parents=@($taskBase.object.sha);author=$taskAuthor;committer=$taskAuthor}
 $taskBranch = 'miniterm-' + $taskVersion + '-' + [guid]::NewGuid().ToString('N').Substring(0,8)
 Post-GhJson ('repos/' + $taskFork + '/git/refs') @{ref=('refs/heads/' + $taskBranch);sha=$taskCommit.sha} | Out-Null
-$taskPr = Post-GhJson 'repos/microsoft/winget-pkgs/pulls' @{title=$taskTitle;body=$taskBody;head=($taskUser.login + ':' + $taskBranch);base=$taskUpstream.default_branch;maintainer_can_modify=$true}
-$taskResult = @{packageIdentifier='hojin-v.MiniTerm';packageVersion=$taskVersion;pullRequestUrl=$taskPr.html_url;pullRequestNumber=$taskPr.number;fork=$taskFork;branch=$taskBranch;status='submitted; awaiting Microsoft validation, review and catalog publication'}
+$taskPr = Post-GhJson 'repos/microsoft/winget-pkgs/pulls' @{title=$taskTitle;body=$taskBody;head=($taskUser.login + ':' + $taskBranch);base=$taskUpstream.default_branch;maintainer_can_modify=$true;draft=[bool]$Draft}
+$taskResult = @{packageIdentifier='hojin-v.MiniTerm';packageVersion=$taskVersion;pullRequestUrl=$taskPr.html_url;pullRequestNumber=$taskPr.number;fork=$taskFork;branch=$taskBranch;draft=[bool]$Draft;status='submitted; awaiting validation, review and catalog publication'}
 [IO.File]::WriteAllText((Join-Path $taskRoot 'artifacts/WINGET_SUBMISSION.json'), ($taskResult | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
 Write-Output $taskPr.html_url
