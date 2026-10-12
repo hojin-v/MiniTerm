@@ -1,5 +1,5 @@
 param(
-    [string]$ManifestDirectory = 'winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.3',
+    [string]$ManifestDirectory = 'winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.6',
     [switch]$VerifyInstaller
 )
 $ErrorActionPreference = 'Stop'

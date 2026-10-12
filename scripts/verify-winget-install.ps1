@@ -1,4 +1,4 @@
-param([string]$ManifestDirectory = 'winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.3')
+param([string]$ManifestDirectory = 'winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.6')
 $ErrorActionPreference = 'Stop'
 trap {
     if ($env:GITHUB_ACTIONS -eq 'true') {

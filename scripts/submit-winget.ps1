@@ -1,5 +1,5 @@
 param(
-    [string]$ManifestDirectory = 'winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.3',
+    [string]$ManifestDirectory = 'winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.6',
     [string]$GhPath = '',
     [switch]$ValidateOnly,
     [switch]$Draft
@@ -14,7 +14,7 @@ if ($taskFiles.Count -ne 4 -or @($taskFiles | Where-Object { $_.Name -notin $tas
 $taskVersion = [regex]::Match([IO.File]::ReadAllText((Join-Path $taskDirectory 'Hnode.MiniTerm.yaml')), '(?m)^PackageVersion: (\S+)\s*$').Groups[1].Value
 if ($taskVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[1-9][0-9]*$') { throw 'Invalid package version.' }
 $taskTitle = "New package: Hnode.MiniTerm version $taskVersion"
-$taskBody = [IO.File]::ReadAllText((Join-Path $taskRoot 'docs/WINGET_PR.md')).Replace('0.1.0-alpha.3', $taskVersion)
+$taskBody = [IO.File]::ReadAllText((Join-Path $taskRoot 'docs/WINGET_PR.md')).Replace('0.1.0-alpha.6', $taskVersion)
 $taskArtifacts = Join-Path $taskRoot 'artifacts/winget-preparation'
 New-Item -ItemType Directory -Path $taskArtifacts -Force | Out-Null
 $taskBodyPath = Join-Path $taskArtifacts 'pull-request.md'

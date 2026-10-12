@@ -1,4 +1,4 @@
-param([string]$ManifestDirectory = 'winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.3')
+param([string]$ManifestDirectory = 'winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.6')
 $ErrorActionPreference = 'Stop'
 # Only disposable hosted runners may adjust the interactive reputation prompt.
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:RUNNER_OS -ne 'Windows' -or -not $env:RUNNER_TEMP) { throw 'Headless installation is restricted to an ephemeral GitHub-hosted Windows runner.' }
