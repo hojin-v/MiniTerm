@@ -183,7 +183,10 @@ impl ShellProfile {
                 bash_path,
                 directory,
             } => {
-                let bash = bash_path.clone().or_else(detect_git_bash).ok_or_else(||
+                let bash = match bash_path {
+                    Some(path) => Some(path.clone()),
+                    None => crate::runtime::bundled_bash()?.or_else(detect_git_bash),
+                }.ok_or_else(||
                     "Git for Windows Bash를 찾지 못했습니다. Git for Windows를 설치하거나 설정에서 bash.exe 경로를 지정하세요.".to_string())?;
                 if !bash.is_file()
                     || !bash

@@ -1,14 +1,21 @@
-﻿param([string]$Executable = 'artifacts/miniterm.exe', [ValidateRange(0,80)][int]$Transparency = 0, [string]$FontFile = '', [string]$BashPath = '', [switch]$GlyphSample, [switch]$SummarySample, [switch]$ProgressSample, [ValidateSet(0,10,30,60)][int]$IdleSeconds = 0, [ValidateRange(1,4)][int]$SessionCount = 1)
+﻿param([string]$Executable = 'artifacts/miniterm.exe', [ValidateRange(0,80)][int]$Transparency = 0, [string]$FontFile = '', [string]$BashPath = '', [string]$ExpectedBashPath = '', [switch]$GlyphSample, [switch]$SummarySample, [switch]$ProgressSample, [ValidateSet(0,10,30,60)][int]$IdleSeconds = 0, [ValidateRange(1,4)][int]$SessionCount = 1)
 $ErrorActionPreference = 'Stop'
 if ($ProgressSample) { $SummarySample = $true }
 $taskRoot = Split-Path -Parent $PSScriptRoot
 $taskExecutable = [IO.Path]::GetFullPath((Join-Path $taskRoot $Executable))
 $taskExplicitBash = $null
 $taskRuntimeHash = $null
+$taskExpectedBash = $null
+if ($BashPath -and $ExpectedBashPath) { throw 'Choose an explicit Bash override or observe automatic selection, not both.' }
 if ($BashPath) {
     $taskExplicitBash = (Get-Item -LiteralPath $BashPath).FullName
     if ([IO.Path]::GetFileName($taskExplicitBash) -ine 'bash.exe') { throw 'Expected an explicit bash.exe.' }
     $taskRuntimeDll = Join-Path (Split-Path -Parent $taskExplicitBash) 'msys-2.0.dll'
+    $taskRuntimeHash = (Get-FileHash -LiteralPath $taskRuntimeDll -Algorithm SHA256).Hash.ToLowerInvariant()
+    $taskExpectedBash = $taskExplicitBash
+} elseif ($ExpectedBashPath) {
+    $taskExpectedBash = (Get-Item -LiteralPath $ExpectedBashPath).FullName
+    $taskRuntimeDll = Join-Path (Split-Path -Parent $taskExpectedBash) 'msys-2.0.dll'
     $taskRuntimeHash = (Get-FileHash -LiteralPath $taskRuntimeDll -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 $taskId = [Guid]::NewGuid().ToString()
@@ -79,7 +86,11 @@ function Get-Widget([string]$Name) {
         if ($null -ne $entry) { return $entry.Value }
         Start-Sleep -Milliseconds 70
     } while ([DateTime]::UtcNow -lt $deadline)
-    throw "Widget not visible: $Name"
+    $taskFailurePointer=New-Object MiniTermUxProbe+CursorPoint
+    [MiniTermUxProbe]::GetCursorPos([ref]$taskFailurePointer) | Out-Null
+    $taskWidgetFailure=@{widget=$Name;pointer=@{x=$taskFailurePointer.X;y=$taskFailurePointer.Y};foreground=[MiniTermUxProbe]::GetForegroundWindow().ToInt64();ui=$snapshot.details.ui;expectedHover=@{x=$taskHoverX;y=$taskHoverY};executableSha256=(Get-FileHash -LiteralPath $taskExecutable -Algorithm SHA256).Hash;note='Own fixture widget bounds and pointer observation at failure; no terminal text or other application titles.'}
+    [IO.File]::WriteAllText((Join-Path $taskFixture 'widget-failure.json'),($taskWidgetFailure | ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+    throw "Widget not visible: $Name; evidence: $taskFixture/widget-failure.json"
 }
 function Invoke-Progress([string]$Action, $Report = $null, [string]$WorkId = '', [long]$Revision = 0, [switch]$Reject) {
     $taskArgs = 'progress ' + $Action
@@ -384,10 +395,10 @@ try {
     $taskSessionSnapshot=(Invoke-Probe 'sessions') | ConvertFrom-Json
     if ($taskSessionSnapshot.sessions.Count -ne $SessionCount) { throw 'Unexpected isolated session count.' }
     $taskShells=@(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($taskProcess.Id) AND Name='bash.exe'" | Select-Object -ExpandProperty ProcessId)
-    if ($taskExplicitBash) {
+    if ($taskExpectedBash) {
         foreach ($taskShell in $taskShells) {
             $taskShellPath = (Get-CimInstance Win32_Process -Filter "ProcessId=$taskShell").ExecutablePath
-            if ($taskShellPath -ine $taskExplicitBash) { throw 'The GUI fixture did not use the explicit Bash runtime.' }
+            if ($taskShellPath -ine $taskExpectedBash) { throw 'The GUI fixture did not use the expected Bash runtime.' }
         }
         if ((Get-FileHash -LiteralPath $taskRuntimeDll -Algorithm SHA256).Hash.ToLowerInvariant() -ne $taskRuntimeHash) { throw 'Runtime changed during the GUI test.' }
     }
@@ -416,6 +427,8 @@ try {
     if ($ProgressSample) { $result.progressChecks=$taskProgressChecks }
     $result.testBashProcessIds=$taskShells
     $result.explicitBashPath=$taskExplicitBash
+    $result.expectedBashPath=$taskExpectedBash
+    $result.automaticBashSelection=([bool]$ExpectedBashPath)
     $result.runtimeSha256=$taskRuntimeHash
     $result.testBashShutdownConfirmed=$true
     [IO.File]::WriteAllText((Join-Path $taskRoot 'artifacts/ux.json'),($result | ConvertTo-Json),[Text.UTF8Encoding]::new($false))

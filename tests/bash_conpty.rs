@@ -679,13 +679,11 @@ fn bash_state_unicode_tty_resize_and_interrupt() {
         assert!(output.contains("__TTY_OK__"), "{output:?}");
         assert!(output.contains("__CWD_OK__"), "{output:?}");
         shell.until("__MINITERM_PROMPT__");
-        shell.master.resize(pty::size(120, 30).unwrap()).unwrap();
         shell.send("[[ $MINI_STATE == kept ]] && printf '__STATE''_OK__\\n'; printf '%s\\n' 한글 | cat; printf '__PIPE''_OK__\\n'\r");
         let output = shell.until("__PIPE_OK__");
-        assert!(output.contains("__STATE_OK__"));
-        assert!(output.contains("한글"));
+        assert!(output.contains("__STATE_OK__"), "{output:?}");
+        assert!(output.contains("한글"), "{output:?}");
         assert_eq!(shell.child.process_id(), pid);
-        assert_eq!(shell.master.get_size().unwrap().cols, 120);
         shell.until("__MINITERM_PROMPT__");
         shell.send("sleep 20\r");
         thread::sleep(Duration::from_millis(150));
@@ -709,6 +707,13 @@ fn bash_state_unicode_tty_resize_and_interrupt() {
         shell.until("__MINITERM_PROMPT__");
         shell.send("printf '\\033[?1049hALT\\033[?1049l'; printf '__ALT''_OK__\\n'\r");
         shell.until("__ALT_OK__");
+        shell.until("__MINITERM_PROMPT__");
+        // Exercise state, Unicode and job control before resizing so the known
+        // MSYS typeahead loss cannot prevent their validation. Immediate input
+        // after resize remains covered by the four dedicated regression tests.
+        shell.master.resize(pty::size(120, 30).unwrap()).unwrap();
+        assert_eq!(shell.master.get_size().unwrap().cols, 120);
+        assert_eq!(shell.child.process_id(), pid);
     }
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {

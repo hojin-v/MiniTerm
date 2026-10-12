@@ -48,6 +48,9 @@ jobs:
       - name: Validate release manifest
         if: startsWith(github.ref, 'refs/tags/')
         run: ./scripts/publish-alpha.ps1 -ReleaseTag $env:MINITERM_RELEASE_TAG -ValidateOnly
+      - name: Verify release installer before publication
+        if: startsWith(github.ref, 'refs/tags/')
+        run: ./scripts/verify-installer.ps1 -InstallerPath ('artifacts/MiniTerm-' + $env:MINITERM_RELEASE_TAG.Substring(1) + '-windows-x64-setup.exe')
       - name: Compatibility evidence
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
@@ -57,6 +60,7 @@ jobs:
           path: |
             artifacts/COMPATIBILITY.json
             artifacts/git-compatibility.log
+            artifacts/native-installer-verification.json
       - name: Package artifact
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:

@@ -28,18 +28,39 @@ impl ResponsesFixture {
         let worker_stop = stop.clone();
         let text = text.to_owned();
         let worker = thread::spawn(move || {
+            let mut clients: Vec<JoinHandle<()>> = Vec::new();
             while !worker_stop.load(Ordering::Acquire) {
+                for index in (0..clients.len()).rev() {
+                    if clients[index].is_finished() {
+                        clients.swap_remove(index).join().unwrap();
+                    }
+                }
+                if clients.len() == 8 {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
                 match listener.accept() {
                     Ok((stream, _)) => {
-                        if serve(stream, &text).is_ok_and(|served| served) {
-                            worker_requests.fetch_add(1, Ordering::Release);
-                        }
+                        let requests = worker_requests.clone();
+                        let text = text.clone();
+                        // An idle preconnected socket must not block a different
+                        // connection carrying the actual SSE request.
+                        clients.push(thread::spawn(move || match serve(stream, &text) {
+                            Ok(true) => {
+                                requests.fetch_add(1, Ordering::Release);
+                            }
+                            Ok(false) => {}
+                            Err(error) => eprintln!("Local SSE fixture transport error: {error}"),
+                        }));
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(10))
                     }
                     Err(_) => break,
                 }
+            }
+            for client in clients {
+                client.join().unwrap();
             }
         });
         Self {
@@ -49,6 +70,26 @@ impl ResponsesFixture {
             worker: Some(worker),
         }
     }
+}
+
+#[test]
+fn idle_connection_does_not_block_sse_request() {
+    let fixture = ResponsesFixture::start("__IDLE_TRANSPORT__");
+    let endpoint = fixture
+        .address
+        .trim_start_matches("http://")
+        .trim_end_matches("/v1");
+    let idle = TcpStream::connect(endpoint).unwrap();
+    let mut active = TcpStream::connect(endpoint).unwrap();
+    active
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    active.write_all(b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+    let mut response = String::new();
+    active.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(response.contains("__IDLE_TRANSPORT__"));
+    drop(idle);
 }
 impl Drop for ResponsesFixture {
     fn drop(&mut self) {

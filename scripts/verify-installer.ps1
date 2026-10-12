@@ -1,4 +1,4 @@
-param([string]$ManifestDirectory = 'winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.3')
+param([string]$ManifestDirectory = 'winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.3', [string]$InstallerPath = '')
 $ErrorActionPreference = 'Stop'
 trap {
     if ($env:GITHUB_ACTIONS -eq 'true') {
@@ -12,10 +12,19 @@ $taskRegistry = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniT
 if ((Test-Path $taskRegistry) -or (Get-Process miniterm -ErrorAction SilentlyContinue)) { throw 'A pre-existing MiniTerm installation/session must not be modified.' }
 $taskRoot = Split-Path -Parent $PSScriptRoot
 $taskDirectory = if ([IO.Path]::IsPathRooted($ManifestDirectory)) { $ManifestDirectory } else { Join-Path $taskRoot $ManifestDirectory }
-$taskManifest = [IO.File]::ReadAllText((Join-Path $taskDirectory 'Hnode.MiniTerm.installer.yaml'))
-$taskVersion = [regex]::Match($taskManifest, '(?m)^PackageVersion: (\S+)\s*$').Groups[1].Value
+if ($InstallerPath) {
+    $taskLocalInstaller = (Get-Item -LiteralPath $InstallerPath).FullName
+    $taskRelease = Get-Content -LiteralPath (Join-Path $taskRoot 'artifacts/RELEASE_MANIFEST.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $taskEntry = @($taskRelease.files | Where-Object { $_.name -eq [IO.Path]::GetFileName($taskLocalInstaller) })
+    if ($taskEntry.Count -ne 1 -or $taskRelease.sourceCommit -ne (& git -C $taskRoot rev-parse HEAD) -or $taskRelease.sourceDirty) { throw 'Local installer must match the clean release manifest.' }
+    $taskVersion = $taskRelease.releaseTag.TrimStart('v')
+    $taskExpectedHash = $taskEntry[0].sha256
+} else {
+    $taskManifest = [IO.File]::ReadAllText((Join-Path $taskDirectory 'Hnode.MiniTerm.installer.yaml'))
+    $taskVersion = [regex]::Match($taskManifest, '(?m)^PackageVersion: (\S+)\s*$').Groups[1].Value
+    $taskExpectedHash = [regex]::Match($taskManifest, '(?m)^\s*InstallerSha256: ([A-Fa-f0-9]{64})\s*$').Groups[1].Value
+}
 if ($taskVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[1-9][0-9]*$') { throw 'Expected an explicit alpha version.' }
-$taskExpectedHash = [regex]::Match($taskManifest, '(?m)^\s*InstallerSha256: ([A-Fa-f0-9]{64})\s*$').Groups[1].Value
 $taskId = [guid]::NewGuid().ToString()
 $taskInstaller = Join-Path $env:RUNNER_TEMP ('MiniTerm-verified-' + $taskId + '.exe')
 $taskInstall = Join-Path $env:RUNNER_TEMP ('MiniTerm-native-' + $taskId)
@@ -25,7 +34,11 @@ $env:MINITERM_INSTANCE_ID = $taskId
 $env:MINITERM_DIAGNOSTICS = '1'
 $env:MINITERM_DATA_DIR = $taskData
 $env:CODEX_HOME = Join-Path $env:RUNNER_TEMP ('MiniTerm-codex-' + $taskId)
-Invoke-WebRequest -Uri "https://github.com/hojin-v/MiniTerm/releases/download/v$taskVersion/MiniTerm-$taskVersion-windows-x64-setup.exe" -OutFile $taskInstaller
+if ($InstallerPath) {
+    Copy-Item -LiteralPath $taskLocalInstaller -Destination $taskInstaller
+} else {
+    Invoke-WebRequest -Uri "https://github.com/hojin-v/MiniTerm/releases/download/v$taskVersion/MiniTerm-$taskVersion-windows-x64-setup.exe" -OutFile $taskInstaller
+}
 if ((Get-FileHash -LiteralPath $taskInstaller -Algorithm SHA256).Hash -ine $taskExpectedHash) { throw 'Publisher installer hash mismatch.' }
 New-Item -ItemType Directory -Path $taskData | Out-Null
 $taskSettings = Join-Path $taskData 'settings.json'
@@ -57,7 +70,11 @@ Invoke-NativeInstaller (Join-Path $taskInstall 'Uninstall.exe') @('/S')
 $taskRemovalDeadline = [DateTime]::UtcNow.AddSeconds(15)
 while (((Test-Path $taskRegistry) -or (Test-Path -LiteralPath (Join-Path $taskInstall 'miniterm.exe'))) -and [DateTime]::UtcNow -lt $taskRemovalDeadline) { Start-Sleep -Milliseconds 100 }
 if ((Test-Path $taskRegistry) -or (Test-Path -LiteralPath (Join-Path $taskInstall 'miniterm.exe')) -or (Get-FileHash -LiteralPath $taskSettings -Algorithm SHA256).Hash -ne $taskSettingsHash) { throw ('Removal or saved-settings preservation failed. Registry exists: ' + (Test-Path $taskRegistry) + '; app exists: ' + (Test-Path -LiteralPath (Join-Path $taskInstall 'miniterm.exe')) + '; settings hash matches: ' + ((Get-FileHash -LiteralPath $taskSettings -Algorithm SHA256).Hash -eq $taskSettingsHash)) }
-$taskManifestHashes = Get-ChildItem -LiteralPath $taskDirectory -File -Filter '*.yaml' | Sort-Object Name | ForEach-Object { $_.Name + ':' + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+$taskManifestHashes = if ($InstallerPath) {
+    'RELEASE_MANIFEST.json:' + (Get-FileHash -LiteralPath (Join-Path $taskRoot 'artifacts/RELEASE_MANIFEST.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+} else {
+    Get-ChildItem -LiteralPath $taskDirectory -File -Filter '*.yaml' | Sort-Object Name | ForEach-Object { $_.Name + ':' + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+}
 $taskHasher = [Security.Cryptography.SHA256]::Create()
 try { $taskManifestHash = [BitConverter]::ToString($taskHasher.ComputeHash([Text.Encoding]::UTF8.GetBytes(($taskManifestHashes -join "`n") + "`n"))).Replace('-', '').ToLowerInvariant() } finally { $taskHasher.Dispose() }
 $taskResult = @{packageIdentifier='Hnode.MiniTerm';packageVersion=$taskVersion;manifestSha256=$taskManifestHash;installerSha256=$taskExpectedHash.ToLowerInvariant();installed=$true;uninstalled=$true;settingsPreserved=$true;executableLoaded=$true;sourceCommit=$env:GITHUB_SHA;scope='Independent /S functional test of the hash-verified publisher NSIS installer on an ephemeral Windows runner. Does not prove WinGet catalog installation or SmartScreen reputation.'}

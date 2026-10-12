@@ -1833,7 +1833,7 @@ impl MiniTerm {
                     ui.text_edit_singleline(&mut self.wsl_directory)
                         .on_hover_text("Linux 도구의 파일 성능을 위해 /home 아래를 권장합니다. 프로젝트를 자동으로 옮기지 않습니다.");
                 } else {
-                    ui.label("Bash 실행 파일 (비우면 자동 탐색)");
+                    ui.label("Bash 실행 파일 (비우면 내장 Bash 또는 설치된 Git)");
                     ui.text_edit_singleline(&mut self.bash_path);
                     ui.label("Windows 시작 폴더 (비우면 사용자 홈)");
                     ui.text_edit_singleline(&mut self.bash_directory);
