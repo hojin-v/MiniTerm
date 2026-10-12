@@ -2,7 +2,7 @@
 
 배포 채널은 GitHub Releases의 **prerelease**다. `main`은 소스, Git 태그는 배포할 소스의 고정 지점이다. 설치 파일은 Git에 커밋하지 않고 Release 자산으로 제공한다. 현재는 공개 저장소이므로 게시된 prerelease도 공개된다. 테스터에게 메시지를 자동 발송하지 않는다.
 
-공식 WinGet 카탈로그 등록용 [Draft PR #450836](https://github.com/microsoft/winget-pkgs/pull/450836)을 제출했다. 사용자에게 안내하는 설치 명령은 `winget install miniterm`이다. 등록 매니페스트의 식별자는 `Hnode.MiniTerm`이며 공개된 같은 설치본과 해시를 사용한다. Microsoft 저장소의 PR 검증·병합·카탈로그 반영이 완료되어야 일반 설치가 가능하다. [WinGet 등록 절차](WINGET.md)를 따른다.
+공식 WinGet 카탈로그 등록용 [PR #450836](https://github.com/microsoft/winget-pkgs/pull/450836)을 `Hnode.MiniTerm 0.1.0-alpha.3`으로 갱신하고 일반 PR로 전환했다. 사용자에게 안내하는 설치 명령은 `winget install miniterm`이다. 제출 파일은 이 저장소의 네 매니페스트와 일치하며, 공개된 alpha.3 설치본의 해시와 독립 무인 설치 검사를 확인했다. 로컬 WinGet 설치의 SmartScreen 대기는 미완료로 명시했다. 새 버전의 Microsoft 검증·검토·병합·카탈로그 반영이 완료되어야 일반 설치가 가능하다. [WinGet 등록 절차](WINGET.md)를 따른다.
 
 ## 제공 파일
 

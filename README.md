@@ -50,13 +50,13 @@ Rust 네이티브 UI와 DX12 렌더링, ConPTY를 사용합니다. 앱 실행에
 
 ## Install
 
-WinGet 공식 카탈로그 등록용 [Draft PR #450836](https://github.com/microsoft/winget-pkgs/pull/450836)을 제출했습니다. PR 검증·검토·병합과 카탈로그 반영이 완료되면 다음 명령으로 설치할 수 있습니다. **현재는 등록 전이므로 일반 WinGet 검색·설치를 사용할 수 없습니다.** [등록 상태와 절차](docs/WINGET.md)를 확인하세요.
+WinGet 공식 카탈로그 등록용 [PR #450836](https://github.com/microsoft/winget-pkgs/pull/450836)을 `Hnode.MiniTerm 0.1.0-alpha.3`으로 갱신하고 검토 가능한 일반 PR로 전환했습니다. 새 버전의 자동 검증·Microsoft 검토·병합과 카탈로그 반영이 완료되면 다음 명령으로 설치할 수 있습니다. **현재는 등록 전이므로 일반 WinGet 검색·설치를 사용할 수 없습니다.** [등록 상태와 절차](docs/WINGET.md)를 확인하세요.
 
 ```powershell
 winget install miniterm
 ```
 
-`winget install MiniTerm`도 같은 이름으로 검색합니다.
+등록 후 `winget install MiniTerm`은 같은 이름으로, `winget install hnode.miniterm`은 패키지 ID로 검색합니다. 기본 검색은 대소문자를 구분하지 않습니다.
 
 [GitHub Releases](https://github.com/hojin-v/MiniTerm/releases/tag/v0.1.0-alpha.3)에서 수정본 `v0.1.0-alpha.3`의 설치본과 ZIP을 받을 수 있습니다.
 
