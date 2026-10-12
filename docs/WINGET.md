@@ -4,7 +4,7 @@
 
 매니페스트·공개 설치 파일 해시 검증은 통과했다. 임시 CI의 로컬 매니페스트 설치는 SmartScreen 확인 단계에서 대기해 완료하지 못했다. 별도 `/S` 기능 검사에서는 공개 설치본의 설치·앱 로딩·제거·설정 보존을 확인했다.
 
-2026-10-12에 GitHub CLI 인증과 [Draft PR #450836](https://github.com/microsoft/winget-pkgs/pull/450836) 제출을 확인했다. 제출된 네 파일의 Git blob 해시는 현재 저장소의 매니페스트와 모두 일치한다. Microsoft의 PR 형식·매니페스트·URL 검사는 통과했고, 설치·보안 등 나머지 검증은 진행 또는 대기 중이다. 계정 소유자의 CLA 동의가 필요해 `Needs-CLA`가 표시되어 있다. 아직 병합되거나 카탈로그에 게시된 상태는 아니다. 최신 결과는 PR의 검사·댓글에서 확인한다.
+2026-10-12에 GitHub CLI 인증과 [Draft PR #450836](https://github.com/microsoft/winget-pkgs/pull/450836) 제출을 확인했다. 제출된 네 파일의 Git blob 해시는 현재 저장소의 매니페스트와 모두 일치한다. Microsoft의 PR 형식·매니페스트·URL·도메인·카탈로그 내용·설치본 스캔과 `license/cla` 검사는 통과했다. 설치·메타데이터 등 나머지 검증은 진행 또는 대기 중이다. 정책 검사는 `NEUTRAL`로 종료됐고, 검사 로그에서 수동 검토가 필요함을 확인했다. 아직 병합되거나 카탈로그에 게시된 상태는 아니다. 최신 결과는 PR의 검사·댓글에서 확인한다.
 
 ## 등록 후 설치·업데이트·제거
 
@@ -51,9 +51,10 @@ Windows 11 x64가 필요하다. MiniTerm은 사용자별 설치이고, Git·Visu
 - [x] 미완료 검증을 명시한 Draft PR 제출: [#450836](https://github.com/microsoft/winget-pkgs/pull/450836)
 - [x] 제출 파일 네 개가 현재 매니페스트와 일치하는지 확인
 - [x] Microsoft의 PR 형식·매니페스트·URL 검사 통과
-- [ ] 계정 소유자가 요청된 CLA를 검토하고 본인 상황에 맞는 동의 댓글 작성
-- [ ] Windows Sandbox 등 대화형 환경에서 WinGet 설치·제거 확인 및 Microsoft 검증 결과에 따른 수정
-- [ ] 검증 완료 후 일반 PR 전환
+- [x] 계정 소유자의 CLA 동의 댓글과 Microsoft `license/cla` 검사 통과 확인
+- [ ] Windows Sandbox 등 대화형 환경 또는 Microsoft의 PR 설치 검증으로 WinGet 설치를 확인하고 지적된 오류 수정
+- [ ] 설치 검증과 저자가 수정할 오류를 해결한 뒤 일반 PR 전환
+- [ ] 정책 검사의 Microsoft 수동 검토 완료
 - [ ] Microsoft 승인·병합 및 카탈로그 반영
 - [ ] 이름·별칭으로 공식 패키지가 검색되는지 확인하고 설치·업데이트 검증 및 README의 등록 상태 갱신
 
@@ -71,7 +72,7 @@ SSH로 이 저장소를 push할 수 있는 것과 GitHub API로 fork·PR을 만�
 ./scripts/submit-winget.ps1 -Draft
 ```
 
-현재 [Microsoft 봇의 CLA 요청 댓글](https://github.com/microsoft/winget-pkgs/pull/450836#issuecomment-6115485956)에 원문과 동의 방법이 표시되어 있다. 계정 소유자가 약관과 제출물의 권리 관계를 검토하고 본인 상황에 맞는 동의 댓글을 직접 작성한다. 실제 동의가 확인되기 전에 PR의 CLA 체크 항목을 완료로 표시하지 않는다.
+[Microsoft 봇의 CLA 요청 댓글](https://github.com/microsoft/winget-pkgs/pull/450836#issuecomment-6115485956)에 원문과 동의 방법이 표시되어 있다. 계정 소유자의 동의 댓글을 Microsoft가 처리해 `license/cla` 검사가 통과했고 `Needs-CLA`가 해제됐다. PR 본문의 CLA 항목도 실제 검사 결과에 맞춰 완료로 표시했다. 다른 제출에서도 계정 소유자가 약관과 제출물의 권리 관계를 검토해 직접 동의한다.
 
 등록 도구를 사용하지 않고 직접 제출하는 절차는 다음과 같다.
 
@@ -83,7 +84,7 @@ SSH로 이 저장소를 push할 수 있는 것과 GitHub API로 fork·PR을 만�
 
 GitHub CLI 로그인과 WinGet CI 성공 후 `./scripts/submit-winget.ps1`로 제출할 수 있다. 도구는 열린 중복 PR을 확인하고, 계정의 fork에 새 브랜치를 만들어 네 파일만 제출한다. 기존 fork의 브랜치를 덮어쓰지 않는다. `-ValidateOnly`는 제출 내용을 확인하며 GitHub 인증·fork·PR 생성을 수행하지 않는다.
 
-독립 설치 검사가 통과했지만 로컬 WinGet 검증이 미완료이면 `./scripts/submit-winget.ps1 -Draft`로 검토용 PR을 준비할 수 있다. 이 경우 검사한 매니페스트의 해시를 대조하고, WinGet 설치 항목은 미완료로 표시하며 SmartScreen 대기와 검증 범위를 본문에 적는다. Draft 생성은 공식 카탈로그 등록 완료가 아니다. 검증을 마치고 일반 PR로 전환한 뒤 Microsoft의 승인·병합·카탈로그 반영을 확인해야 한다.
+독립 설치 검사가 통과했지만 로컬 WinGet 검증이 미완료이면 `./scripts/submit-winget.ps1 -Draft`로 검토용 PR을 준비할 수 있다. 이 경우 검사한 매니페스트의 해시를 대조하고, WinGet 설치 항목은 미완료로 표시하며 SmartScreen 대기와 검증 범위를 본문에 적는다. Draft 생성은 공식 카탈로그 등록 완료가 아니다. WinGet 설치 검증과 저자가 수정할 오류를 해결한 뒤 일반 PR로 전환한다. 정책의 수동 검토, Microsoft 승인·병합·카탈로그 반영은 별도 단계다.
 
 후속 버전은 새 GitHub Release를 먼저 공개하고 `prepare-winget.ps1`로 새 버전의 해시를 확인한 뒤 별도 업데이트 PR로 제출한다. 이미 게시한 설치 파일·태그·해시를 바꾸지 않는다. 공개 릴리스와 공식 카탈로그는 별도의 배포 단계다.
 

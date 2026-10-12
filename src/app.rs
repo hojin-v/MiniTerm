@@ -2244,6 +2244,15 @@ impl MiniTerm {
 }
 
 impl eframe::App for MiniTerm {
+    fn raw_input_hook(&mut self, _ctx: &Context, input: &mut egui::RawInput) {
+        // epaint uses the device's maximum texture side as its font-atlas width.
+        // A 16K-wide atlas wastes resident CPU/upload memory for this small HUD.
+        // Keep glyphs on demand and respect devices with a smaller texture limit.
+        if let Some(side) = &mut input.max_texture_side {
+            *side = (*side).min(4096);
+        }
+    }
+
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         let frame_start = Instant::now();
         if let Some(map) = &self.diagnostic_ui {
@@ -2610,12 +2619,18 @@ impl Drop for MiniTerm {
                 .get(((samples.len() as f64 * fraction).ceil() as usize).saturating_sub(1))
                 .copied()
         };
+        let font_atlas_size = (!self.frame_samples.is_empty()).then(|| {
+            self.display_watch
+                .context()
+                .fonts(|fonts| fonts.font_image_size())
+        });
         let metrics = serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"), "renderer": "wgpu / DX12", "adapter": self.adapter_name,
             "uiFrameSamples": samples.len(), "uiCpuMedianMs": percentile(0.5), "uiCpuP95Ms": percentile(0.95),
             "repaintCauses": self.repaint_causes,
             "startupFocusPreserved": self.startup_focus_preserved,
             "sessions": self.sessions.len(), "pendingStarts": self.starting,
+            "fontAtlasSize": font_atlas_size,
             "note": "UI construction CPU time only; excludes GPU present and input-to-pixel latency. No terminal content is recorded."
         });
         if let Some(parent) = path.parent() {

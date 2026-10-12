@@ -383,7 +383,9 @@ try {
         }
         if ((Get-FileHash -LiteralPath $taskRuntimeDll -Algorithm SHA256).Hash.ToLowerInvariant() -ne $taskRuntimeHash) { throw 'Runtime changed during the GUI test.' }
     }
-    if ([MiniTermUxProbe]::GetForegroundWindow() -ne $taskFocus) { throw 'Preview stole foreground focus.' }
+    $taskFinalForeground = [MiniTermUxProbe]::GetForegroundWindow()
+    if ($taskFinalForeground -eq $taskWindow) { throw 'Preview stole foreground focus.' }
+    $taskForegroundPreserved = $taskFinalForeground -eq $taskFocus
     foreach ($id in $taskUserProcesses) { if (-not (Get-Process -Id $id -ErrorAction SilentlyContinue)) { throw 'User MiniTerm stopped during isolated test.' } }
     if ($IdleSeconds -gt 0) {
         & (Join-Path $PSScriptRoot 'measure-idle.ps1') -ProcessId $taskProcess.Id -Seconds $IdleSeconds -OutputPath (Join-Path $taskFixture 'idle.json') | Out-Null
@@ -394,6 +396,9 @@ try {
     if ($taskMetrics.sessions -ne $SessionCount -or $taskMetrics.pendingStarts -ne 0) { throw 'Session startup was not complete during the resource test.' }
     foreach ($taskShell in $taskShells) { if (Get-Process -Id $taskShell -ErrorAction SilentlyContinue) { throw 'A test Bash process survived app shutdown.' } }
     $result=@{fixture=$taskFixture;executableSha256=(Get-FileHash $taskExecutable -Algorithm SHA256).Hash;bodyDoubleClick=$true;verticalExpansion=$true;fixtureAnsiPreserved=$true;expansionGeometryMs=$timeline[-1].ms;expansionSizes=$timeline;resizeHitTest=$true;dragAndResizePersistence=$true;liveDarkLight=($Transparency -eq 0);compositorSmallCorners=$true;noBinaryRegion=$true;nativeTransparency=$Transparency;glyphCaptures=[bool]$GlyphSample;userSessionPreserved=$true;foregroundPreserved=$true;note='Client mouse messages, shared theme handler and native move/resize completion; geometry includes stable tail and excludes pixel latency. Optional glyph captures require image review; they are not a Codex popup test.'}
+    $result.foregroundPreserved=$taskForegroundPreserved
+    $result.foregroundChangedExternally=-not $taskForegroundPreserved
+    $result.focusObservationScope='Startup metric and final foreground observation only. An unrelated foreground change does not prove the preview stole focus; uninterrupted focus is unverified in that case.'
     $result.sessionCount=$SessionCount
     $result.summaryCaptures=[bool]$SummarySample
     $result.bodyCollapsePositions=@('top','middle','bottom')
