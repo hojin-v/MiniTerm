@@ -97,6 +97,10 @@ try {
     if (-not $taskProcess.WaitForExit(10000) -or $taskProcess.ExitCode -ne 0) { throw 'The installed application cannot load or reports an unexpected live session.' }
 } finally { $taskProcess.Dispose() }
 Invoke-TestWinGet @('uninstall','--manifest',$taskDirectory,'--silent','--disable-interactivity','--accept-source-agreements')
+# NSIS hands removal to a temporary child; WinGet can return before it exits.
+# Match the native installer check by observing actual files and registration.
+$taskRemovalDeadline = [DateTime]::UtcNow.AddSeconds(15)
+while (((Test-Path $taskRegistry) -or (Test-Path -LiteralPath $taskExe)) -and [DateTime]::UtcNow -lt $taskRemovalDeadline) { Start-Sleep -Milliseconds 100 }
 if ((Test-Path $taskRegistry) -or (Test-Path -LiteralPath $taskExe)) { throw 'WinGet removal left installed app files or the Apps & Features entry.' }
 if ((Get-FileHash -LiteralPath $taskSettings -Algorithm SHA256).Hash -ne $taskSettingsHash) { throw 'Install/removal changed saved user settings.' }
 $taskManifestHashes = Get-ChildItem -LiteralPath $taskDirectory -File -Filter '*.yaml' | Sort-Object Name | ForEach-Object { $_.Name + ':' + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
