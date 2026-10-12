@@ -7,11 +7,13 @@
 ## 등록 후 설치·업데이트·제거
 
 ```powershell
-winget show --id hojin-v.MiniTerm --exact --source winget
-winget install --id hojin-v.MiniTerm --exact --source winget
-winget upgrade --id hojin-v.MiniTerm --exact --source winget
-winget uninstall --id hojin-v.MiniTerm --exact
+winget show hojin-v.MiniTerm
+winget install hojin-v.MiniTerm
+winget upgrade hojin-v.MiniTerm
+winget uninstall hojin-v.MiniTerm
 ```
+
+일반 설치 안내에는 패키지 ID만 사용한다. `--id`는 검색 필드를 ID로 제한하고, `--exact`는 정확히 일치하는 결과만 선택하며, `--source winget`은 검색할 소스를 제한하는 선택 옵션이다. 같은 ID의 결과가 여러 소스에 있어 모호할 때 또는 배포 검증을 자동화할 때 추가한다. [Microsoft 설치 명령 문서](https://learn.microsoft.com/en-us/windows/package-manager/winget/install)를 참고한다.
 
 Windows 11 x64가 필요하다. MiniTerm은 사용자별 설치이고, Git·Visual C++ v14 x64 런타임은 패키지 의존성으로 선언했다. 의존성 설치에서 관리자 권한이 필요할 수 있다. 업데이트·제거 전에는 작업을 마치고 MiniTerm을 종료한다. 실행 중인 세션을 강제로 종료하는 설치 방식은 사용하지 않는다. 알파의 알려진 문제는 [현재 상태](STATUS.md)에 유지한다.
 
@@ -36,6 +38,35 @@ Windows 11 x64가 필요하다. MiniTerm은 사용자별 설치이고, Git·Visu
 미등록 로컬 매니페스트와 공식 카탈로그는 WinGet의 신뢰 처리 경로가 다르다. Microsoft의 [다운로드 처리 구현](https://github.com/microsoft/winget-cli/blob/master/src/AppInstallerCLICore/Workflows/DownloadFlow.cpp)은 신뢰하는 소스의 해시 일치 파일과 로컬 파일을 구분한다. CI의 보안 확인 대기를 카탈로그 설치 성공으로 표시하지 않는다. Microsoft의 검증과 실제 카탈로그 설치 확인이 남아 있다.
 
 ## 공식 등록
+
+현재 완료한 작업과 남은 작업은 다음과 같다.
+
+- [x] GitHub Release에 버전이 고정된 설치본과 해시 공개
+- [x] 매니페스트 네 개 작성 및 `winget validate` 통과
+- [x] 공개 설치본의 독립 무인 설치·앱 로딩·제거·설정 보존 검사
+- [x] 등록 PR 본문과 제출 도구 준비
+- [ ] 계정 소유자의 GitHub CLI 인증
+- [ ] 미완료 검증을 명시한 Draft PR 제출
+- [ ] Windows Sandbox 등 대화형 환경에서 WinGet 설치·제거 확인 및 Microsoft 검증 결과에 따른 수정
+- [ ] 검증 완료 후 일반 PR 전환, 요청 시 계정 소유자의 CLA 서명
+- [ ] Microsoft 승인·병합 및 카탈로그 반영
+- [ ] 공식 소스로 설치·업데이트를 확인하고 README의 등록 상태 갱신
+
+이 작업 공간에는 GitHub CLI를 `.tools/github-cli/bin/gh.exe`에 준비했다. 프로젝트 루트에서 다음 명령을 실행하고 브라우저의 인증을 완료한다. 시스템에 GitHub CLI를 설치한 경우 같은 옵션으로 `gh auth login`을 사용할 수 있다.
+
+```powershell
+./.tools/github-cli/bin/gh.exe auth login --hostname github.com --git-protocol ssh --web --skip-ssh-key
+```
+
+SSH로 이 저장소를 push할 수 있는 것과 GitHub API로 fork·PR을 만드는 인증은 별개다. 이 명령은 새 SSH 키 등록 단계를 건너뛰고 GitHub CLI의 브라우저 인증을 진행한다. 토큰을 대화나 저장소 파일에 붙여 넣지 않는다. [GitHub CLI 인증 문서](https://cli.github.com/manual/gh_auth_login)를 참고한다.
+
+현재 독립 설치 검사는 통과했지만 로컬 WinGet 검증은 미완료이므로, 인증 후 제출 도구의 Draft 경로를 사용한다.
+
+```powershell
+./scripts/submit-winget.ps1 -Draft
+```
+
+등록 도구를 사용하지 않고 직접 제출하는 절차는 다음과 같다.
 
 1. 검증과 CI 결과를 확인하고 같은 패키지·버전의 열린 PR이 없는지 확인한다.
 2. GitHub에 로그인한 계정으로 `microsoft/winget-pkgs`를 fork하고 네 파일만 새 브랜치에 추가한다.

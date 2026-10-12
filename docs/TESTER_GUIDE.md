@@ -4,7 +4,7 @@
 
 ## 설치
 
-WinGet 등록 완료 후에는 `winget install --id hojin-v.MiniTerm --exact --source winget`으로 설치할 수 있다. 등록 전에는 아래 GitHub Releases 설치본을 사용한다. [WinGet 등록 상태](WINGET.md)를 확인한다. WinGet 매니페스트에는 Git·Visual C++ 런타임 의존성을 넣으며 필요한 경우 관리자 권한을 요청할 수 있다.
+WinGet 등록 완료 후에는 `winget install hojin-v.MiniTerm`으로 설치할 수 있다. 등록 전에는 아래 GitHub Releases 설치본을 사용한다. [WinGet 등록 상태](WINGET.md)를 확인한다. WinGet 매니페스트에는 Git·Visual C++ 런타임 의존성을 넣으며 필요한 경우 관리자 권한을 요청할 수 있다.
 
 1. Git for Windows, DX12 지원 그래픽 드라이버, 최신 [Microsoft Visual C++ v14 x64 런타임](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)을 준비한다. 공식 페이지의 [x64 설치 파일](https://aka.ms/vc14/vc_redist.x64.exe)을 사용한다. 런타임 설치는 관리자 권한이 필요할 수 있으며 MiniTerm이 자동 설치하지 않는다.
 2. [Releases](https://github.com/hojin-v/MiniTerm/releases)에서 `MiniTerm-0.1.0-alpha.1-windows-x64-setup.exe`와 `SHA256SUMS`를 받는다. `Source code` ZIP은 실행 파일이 아니다.
