@@ -51,8 +51,10 @@ Rust 네이티브 UI와 DX12 렌더링, ConPTY를 사용합니다. 앱 실행에
 WinGet 공식 카탈로그 등록을 준비하고 있습니다. 등록 PR이 병합되고 카탈로그에 반영되면 다음 명령으로 설치할 수 있습니다. **현재는 등록 전이므로 일반 WinGet 검색·설치를 사용할 수 없습니다.** [등록 상태와 절차](docs/WINGET.md)를 확인하세요.
 
 ```powershell
-winget install hojin-v.MiniTerm
+winget install miniterm
 ```
+
+`winget install MiniTerm`도 같은 이름으로 검색합니다.
 
 [GitHub Releases](https://github.com/hojin-v/MiniTerm/releases)에서 테스터 알파를 선택합니다. 첫 배포 버전은 `v0.1.0-alpha.1`입니다. 태그 빌드가 완료되면 설치본과 ZIP이 등록됩니다.
 

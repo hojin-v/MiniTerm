@@ -1,19 +1,19 @@
 # WinGet 공식 카탈로그 배포
 
-패키지 ID는 **`hojin-v.MiniTerm`**이다. 현재 `0.1.0-alpha.1`의 제출용 매니페스트를 준비했다. Microsoft `winget-pkgs`의 등록 PR이 병합되고 카탈로그에 반영되기 전에는 일반 검색·설치를 제공한다고 표시하지 않는다. 매니페스트를 이 저장소에 올리는 것만으로 공식 등록이 완료되지는 않는다.
+사용자에게 안내하는 설치 명령은 **`winget install miniterm`**이다. 매니페스트의 이름은 `MiniTerm`, 별칭은 `miniterm`으로 설정했다. 등록용 패키지 ID는 `hojin-v.MiniTerm`이며 일반 설치 명령에는 입력할 필요가 없다. 현재 `0.1.0-alpha.1`의 제출용 매니페스트를 준비했다. Microsoft `winget-pkgs`의 등록 PR이 병합되고 카탈로그에 반영되기 전에는 일반 검색·설치를 제공한다고 표시하지 않는다. 매니페스트를 이 저장소에 올리는 것만으로 공식 등록이 완료되지는 않는다.
 
 매니페스트·공개 설치 파일 해시 검증은 통과했다. 임시 CI의 로컬 매니페스트 설치는 SmartScreen 확인 단계에서 대기해 완료하지 못했다. 별도 `/S` 기능 검사에서는 공개 설치본의 설치·앱 로딩·제거·설정 보존을 확인했다. 현재 GitHub CLI 인증도 없어 등록 PR을 아직 제출하지 않았다.
 
 ## 등록 후 설치·업데이트·제거
 
 ```powershell
-winget show hojin-v.MiniTerm
-winget install hojin-v.MiniTerm
-winget upgrade hojin-v.MiniTerm
-winget uninstall hojin-v.MiniTerm
+winget show miniterm
+winget install miniterm
+winget upgrade miniterm
+winget uninstall miniterm
 ```
 
-일반 설치 안내에는 패키지 ID만 사용한다. `--id`는 검색 필드를 ID로 제한하고, `--exact`는 정확히 일치하는 결과만 선택하며, `--source winget`은 검색할 소스를 제한하는 선택 옵션이다. 같은 ID의 결과가 여러 소스에 있어 모호할 때 또는 배포 검증을 자동화할 때 추가한다. [Microsoft 설치 명령 문서](https://learn.microsoft.com/en-us/windows/package-manager/winget/install)를 참고한다.
+일반 설치 안내에는 이름·별칭 `miniterm`을 사용한다. 기본 검색은 대소문자를 구분하지 않으므로 `winget install MiniTerm`도 사용할 수 있다. `--id`는 검색 필드를 ID로 제한하고, `--exact`는 정확히 일치하는 결과만 선택하며, `--source winget`은 검색할 소스를 제한하는 선택 옵션이다. 검색 결과가 모호할 때 또는 배포 검증을 자동화할 때 추가한다. [Microsoft 설치 명령 문서](https://learn.microsoft.com/en-us/windows/package-manager/winget/install)를 참고한다.
 
 Windows 11 x64가 필요하다. MiniTerm은 사용자별 설치이고, Git·Visual C++ v14 x64 런타임은 패키지 의존성으로 선언했다. 의존성 설치에서 관리자 권한이 필요할 수 있다. 업데이트·제거 전에는 작업을 마치고 MiniTerm을 종료한다. 실행 중인 세션을 강제로 종료하는 설치 방식은 사용하지 않는다. 알파의 알려진 문제는 [현재 상태](STATUS.md)에 유지한다.
 
@@ -50,7 +50,7 @@ Windows 11 x64가 필요하다. MiniTerm은 사용자별 설치이고, Git·Visu
 - [ ] Windows Sandbox 등 대화형 환경에서 WinGet 설치·제거 확인 및 Microsoft 검증 결과에 따른 수정
 - [ ] 검증 완료 후 일반 PR 전환, 요청 시 계정 소유자의 CLA 서명
 - [ ] Microsoft 승인·병합 및 카탈로그 반영
-- [ ] 공식 소스로 설치·업데이트를 확인하고 README의 등록 상태 갱신
+- [ ] 이름·별칭으로 공식 패키지가 검색되는지 확인하고 설치·업데이트 검증 및 README의 등록 상태 갱신
 
 이 작업 공간에는 GitHub CLI를 `.tools/github-cli/bin/gh.exe`에 준비했다. 프로젝트 루트에서 다음 명령을 실행하고 브라우저의 인증을 완료한다. 시스템에 GitHub CLI를 설치한 경우 같은 옵션으로 `gh auth login`을 사용할 수 있다.
 
@@ -72,7 +72,7 @@ SSH로 이 저장소를 push할 수 있는 것과 GitHub API로 fork·PR을 만�
 2. GitHub에 로그인한 계정으로 `microsoft/winget-pkgs`를 fork하고 네 파일만 새 브랜치에 추가한다.
 3. 제목 `New package: hojin-v.MiniTerm version 0.1.0-alpha.1`로 PR을 제출한다. [PR 본문](WINGET_PR.md)의 검사 항목은 실제 결과에 맞게 표시한다.
 4. Microsoft 봇과 검토자의 결과를 확인한다. CLA 동의가 요청되면 계정 소유자가 직접 확인하고 서명한다. 인증 토큰을 소스·로그·PR에 넣지 않는다.
-5. 병합과 카탈로그 반영 후 `winget show --id hojin-v.MiniTerm --exact --source winget`으로 등록을 확인하고 README의 상태를 갱신한다.
+5. 병합과 카탈로그 반영 후 `winget show miniterm`과 `winget show MiniTerm`이 공식 패키지로 연결되는지 확인한다. `winget install miniterm`으로 설치하고 업데이트도 확인한 뒤 README의 상태를 갱신한다. 자동 검사에서 등록 ID와 소스를 엄격하게 확인할 때는 `winget show --id hojin-v.MiniTerm --exact --source winget`을 사용한다.
 
 GitHub CLI 로그인과 WinGet CI 성공 후 `./scripts/submit-winget.ps1`로 제출할 수 있다. 도구는 열린 중복 PR을 확인하고, 계정의 fork에 새 브랜치를 만들어 네 파일만 제출한다. 기존 fork의 브랜치를 덮어쓰지 않는다. `-ValidateOnly`는 제출 내용을 확인하며 GitHub 인증·fork·PR 생성을 수행하지 않는다.
 
