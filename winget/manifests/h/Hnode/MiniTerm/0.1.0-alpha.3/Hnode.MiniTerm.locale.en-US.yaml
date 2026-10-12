@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
 
 PackageIdentifier: Hnode.MiniTerm
-PackageVersion: 0.1.0-alpha.2
+PackageVersion: 0.1.0-alpha.3
 PackageLocale: en-US
 Publisher: Hnode
 PublisherUrl: https://github.com/hojin-v/MiniTerm
@@ -21,7 +21,7 @@ Tags:
 - cli
 - terminal
 - developer-tools
-ReleaseNotesUrl: https://github.com/hojin-v/MiniTerm/releases/tag/v0.1.0-alpha.2
+ReleaseNotesUrl: https://github.com/hojin-v/MiniTerm/releases/tag/v0.1.0-alpha.3
 Documentations:
 - DocumentLabel: Tester guide
   DocumentUrl: https://github.com/hojin-v/MiniTerm/blob/main/docs/TESTER_GUIDE.md

@@ -1,6 +1,6 @@
 # WinGet 공식 카탈로그 배포
 
-사용자에게 안내하는 설치 명령은 **`winget install miniterm`**이다. 매니페스트의 이름은 `MiniTerm`, 별칭은 `miniterm`으로 설정했다. 등록용 패키지 ID는 `Hnode.MiniTerm`이며 일반 설치 명령에는 입력할 필요가 없다. 현재 `0.1.0-alpha.2`의 제출용 매니페스트를 준비했다. Microsoft `winget-pkgs`의 등록 PR이 병합되고 카탈로그에 반영되기 전에는 일반 검색·설치를 제공한다고 표시하지 않는다. 매니페스트를 이 저장소에 올리는 것만으로 공식 등록이 완료되지는 않는다.
+사용자에게 안내하는 설치 명령은 **`winget install miniterm`**이다. 매니페스트의 이름은 `MiniTerm`, 별칭은 `miniterm`으로 설정했다. 등록용 패키지 ID는 `Hnode.MiniTerm`이며 일반 설치 명령에는 입력할 필요가 없다. 현재 `0.1.0-alpha.3`의 제출용 매니페스트를 준비했다. Microsoft `winget-pkgs`의 등록 PR이 병합되고 카탈로그에 반영되기 전에는 일반 검색·설치를 제공한다고 표시하지 않는다. 매니페스트를 이 저장소에 올리는 것만으로 공식 등록이 완료되지는 않는다.
 
 등록 ID는 `Hnode.MiniTerm`, 매니페스트와 설치 프로그램의 게시자는 `Hnode`다. 기본 검색은 대소문자를 구분하지 않으므로 `winget install hnode.miniterm`도 같은 패키지를 선택한다.
 
@@ -21,7 +21,7 @@ Windows 11 x64가 필요하다. MiniTerm은 사용자별 설치이고, Git·Visu
 
 ## 제출 파일과 검증
 
-[`winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.2`](../winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.2)에 버전·설치·영어·한국어 매니페스트 네 개를 보관한다. 커뮤니티 저장소에는 이 경로에서 `winget/` 접두사를 뺀 `manifests/h/Hnode/MiniTerm/0.1.0-alpha.2`로 제출한다.
+[`winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.3`](../winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.3)에 버전·설치·영어·한국어 매니페스트 네 개를 보관한다. 커뮤니티 저장소에는 이 경로에서 `winget/` 접두사를 뺀 `manifests/h/Hnode/MiniTerm/0.1.0-alpha.3`로 제출한다.
 
 - 스키마 1.12.0, `nullsoft`, x64, 사용자 범위, Windows 11 최소 빌드
 - 공개된 버전별 NSIS 설치 URL과 실제 설치 파일 SHA256
@@ -31,7 +31,7 @@ Windows 11 x64가 필요하다. MiniTerm은 사용자별 설치이고, Git·Visu
 
 ```powershell
 ./scripts/verify-winget.ps1 -VerifyInstaller
-./scripts/prepare-winget.ps1 -ReleaseTag v0.1.0-alpha.2
+./scripts/prepare-winget.ps1 -ReleaseTag v0.1.0-alpha.3
 ./scripts/submit-winget.ps1 -ValidateOnly
 ```
 
@@ -78,7 +78,7 @@ SSH로 이 저장소를 push할 수 있는 것과 GitHub API로 fork·PR을 만�
 
 1. 검증과 CI 결과를 확인하고 같은 패키지·버전의 열린 PR이 없는지 확인한다.
 2. GitHub에 로그인한 계정으로 `microsoft/winget-pkgs`를 fork하고 네 파일만 새 브랜치에 추가한다.
-3. 제목 `New package: Hnode.MiniTerm version 0.1.0-alpha.2`로 PR을 제출한다. [PR 본문](WINGET_PR.md)의 검사 항목은 실제 결과에 맞게 표시한다.
+3. 제목 `New package: Hnode.MiniTerm version 0.1.0-alpha.3`로 PR을 제출한다. [PR 본문](WINGET_PR.md)의 검사 항목은 실제 결과에 맞게 표시한다.
 4. Microsoft 봇과 검토자의 결과를 확인한다. CLA 동의가 요청되면 계정 소유자가 직접 확인하고 서명한다. 인증 토큰을 소스·로그·PR에 넣지 않는다.
 5. 병합과 카탈로그 반영 후 `winget show miniterm`과 `winget show MiniTerm`이 공식 패키지로 연결되는지 확인한다. `winget install miniterm`으로 설치하고 업데이트도 확인한 뒤 README의 상태를 갱신한다. 자동 검사에서 등록 ID와 소스를 엄격하게 확인할 때는 `winget show --id Hnode.MiniTerm --exact --source winget`을 사용한다.
 

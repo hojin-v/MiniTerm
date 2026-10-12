@@ -12,7 +12,7 @@ if ($taskInstaller.Count -ne 1 -or $taskInstaller[0].state -ne 'uploaded' -or $t
 $taskHash = $Matches[1].ToUpperInvariant()
 $taskExpectedUrl = "https://github.com/hojin-v/MiniTerm/releases/download/$ReleaseTag/$taskName"
 if ($taskInstaller[0].browser_download_url -ne $taskExpectedUrl) { throw 'Unexpected installer URL.' }
-$taskTemplateVersion = '0.1.0-alpha.2'
+$taskTemplateVersion = '0.1.0-alpha.3'
 $taskTemplate = Join-Path $taskRoot "winget/manifests/h/Hnode/MiniTerm/$taskTemplateVersion"
 $taskOutput = Join-Path $taskRoot "artifacts/winget/manifests/h/Hnode/MiniTerm/$taskVersion"
 New-Item -ItemType Directory -Path $taskOutput -Force | Out-Null
