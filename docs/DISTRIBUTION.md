@@ -26,7 +26,7 @@
 ./scripts/cargo.ps1 -CargoArguments @('clippy','--locked','--all-targets','--','-D','warnings')
 ./scripts/verify-git-compatibility.ps1 -AllowKnownFailures
 ./scripts/build.ps1
-./scripts/package.ps1 -SkipBuild -ReleaseTag v0.1.0-alpha.4
+./scripts/package.ps1 -SkipBuild -ReleaseTag v0.1.0-alpha.5
 ```
 
 마지막 명령은 문서·체크섬·ZIP·설치본을 생성한다. `-SkipBuild`는 먼저 빌드한 실행 파일이 있을 때만 사용한다. 버전 태그의 숫자 부분은 Cargo 버전과 일치해야 한다. `BUILD_INFO.json`에는 소스 커밋과 작업 트리 변경 여부를 기록한다. 게시할 때는 깨끗한 커밋의 결과를 사용한다.
@@ -40,12 +40,12 @@
 3. 다음 태그를 같은 커밋에 만들고 푸시한다.
 
    ```bash
-   git tag -a v0.1.0-alpha.4 -m "MiniTerm tester alpha 4"
-   git push origin v0.1.0-alpha.4
+   git tag -a v0.1.0-alpha.5 -m "MiniTerm tester alpha 4"
+   git push origin v0.1.0-alpha.5
    ```
 
 4. Windows Actions가 검사·패키징 후 해당 태그의 prerelease와 자산을 생성한다. 작업이 실패하면 배포를 완료했다고 표시하지 않는다. 자산이 모두 올라간 후에만 draft를 공개 prerelease로 바꾼다.
-5. 테스터에게 `https://github.com/hojin-v/MiniTerm/releases/tag/v0.1.0-alpha.4`과 테스터 안내 링크를 공유한다. 다운로드·실행 여부와 피드백은 직접 확인한다.
+5. 테스터에게 `https://github.com/hojin-v/MiniTerm/releases/tag/v0.1.0-alpha.5`과 테스터 안내 링크를 공유한다. 다운로드·실행 여부와 피드백은 직접 확인한다.
 
 현재 workflow는 `v*-alpha.*` 태그만 게시한다. 안정판을 자동 게시하지 않는다. Actions의 저장소 한정 `GITHUB_TOKEN`과 게시 단계의 `contents: write`를 사용하며 별도 PAT를 저장소에 넣지 않는다. 외부 Actions는 커밋 SHA로 고정한다. [GitHub Releases](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases), [Actions 인증](https://docs.github.com/en/actions/tutorials/authenticate-with-github_token)을 참고한다.
 

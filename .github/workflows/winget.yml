@@ -81,7 +81,7 @@ jobs:
       - name: Validate manifest and public installer hash
         run: ./scripts/verify-winget.ps1 -VerifyInstaller
       - name: Test WinGet installation and removal
-        run: ./scripts/verify-winget-install.ps1
+        run: ./scripts/verify-winget-headless.ps1
       - name: Installation evidence
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5

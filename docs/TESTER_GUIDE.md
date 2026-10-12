@@ -1,19 +1,19 @@
 # 테스터 안내
 
-현재 수정본은 `v0.1.0-alpha.4`, Windows 11 x64용 제한된 알파다. 기본 Git Bash의 리사이즈 입력 누락과 출력 부하·입력 지연 등 미검증 성능 조건이 남아 있다. 안정판 터미널을 대체하는 용도로 권장하지 않는다.
+현재 수정본은 `v0.1.0-alpha.5`, Windows 11 x64용 제한된 알파다. 기본 Git Bash의 리사이즈 입력 누락과 출력 부하·입력 지연 등 미검증 성능 조건이 남아 있다. 안정판 터미널을 대체하는 용도로 권장하지 않는다.
 
 ## 설치
 
 WinGet 등록 완료 후에는 `winget install miniterm`으로 설치할 수 있다. `winget install MiniTerm`과 `winget install hnode.miniterm`도 사용할 수 있다. 등록 전에는 아래 GitHub Releases 설치본을 사용한다. [WinGet 등록 상태](WINGET.md)를 확인한다. WinGet 매니페스트에는 Git·Visual C++ 런타임 의존성을 넣으며 필요한 경우 관리자 권한을 요청할 수 있다.
 
 1. Git for Windows, DX12 지원 그래픽 드라이버, 최신 [Microsoft Visual C++ v14 x64 런타임](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)을 준비한다. 공식 페이지의 [x64 설치 파일](https://aka.ms/vc14/vc_redist.x64.exe)을 사용한다. 런타임 설치는 관리자 권한이 필요할 수 있으며 MiniTerm이 자동 설치하지 않는다.
-2. [Releases](https://github.com/hojin-v/MiniTerm/releases)에서 `MiniTerm-0.1.0-alpha.4-windows-x64-setup.exe`와 `SHA256SUMS`를 받는다. `Source code` ZIP은 실행 파일이 아니다.
-3. PowerShell의 `Get-FileHash .\MiniTerm-0.1.0-alpha.4-windows-x64-setup.exe -Algorithm SHA256` 결과를 `SHA256SUMS`의 같은 파일 항목과 비교한다.
+2. [Releases](https://github.com/hojin-v/MiniTerm/releases)에서 `MiniTerm-0.1.0-alpha.5-windows-x64-setup.exe`와 `SHA256SUMS`를 받는다. `Source code` ZIP은 실행 파일이 아니다.
+3. PowerShell의 `Get-FileHash .\MiniTerm-0.1.0-alpha.5-windows-x64-setup.exe -Algorithm SHA256` 결과를 `SHA256SUMS`의 같은 파일 항목과 비교한다.
 4. 설치본을 실행한다. 사용자별 `%LOCALAPPDATA%\Programs\MiniTerm`에 설치하며 관리자 권한은 요구하지 않는다. 설치 후 해당 폴더의 `miniterm.exe`를 실행한다.
 
 현재 설치본은 코드 서명이 없다. 출처·해시를 확인하고 조직의 실행 정책을 따른다. 백신을 끄거나 차단을 일괄 우회하지 않는다. Codex·Claude Code·AI Battery는 포함하지 않으며 각 도구의 설치와 로그인을 별도로 준비한다.
 
-압축형 `MiniTerm-0.1.0-alpha.4-windows-x64.zip`은 같은 폴더에 모두 풀고 `miniterm.exe`를 실행한다. 알림 등록은 자동 수행하지 않으며 설정에서 별도로 등록한다. ZIP과 설치본은 같은 설정 경로와 단일 앱 인스턴스를 사용한다. 설정까지 분리된 포터블 모드는 아니다.
+압축형 `MiniTerm-0.1.0-alpha.5-windows-x64.zip`은 같은 폴더에 모두 풀고 `miniterm.exe`를 실행한다. 알림 등록은 자동 수행하지 않으며 설정에서 별도로 등록한다. ZIP과 설치본은 같은 설정 경로와 단일 앱 인스턴스를 사용한다. 설정까지 분리된 포터블 모드는 아니다.
 
 ## 시험 순서
 

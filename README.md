@@ -58,12 +58,12 @@ winget install miniterm
 
 등록 후 `winget install MiniTerm`은 같은 이름으로, `winget install hnode.miniterm`은 패키지 ID로 검색합니다. 기본 검색은 대소문자를 구분하지 않습니다.
 
-[GitHub Releases](https://github.com/hojin-v/MiniTerm/releases/tag/v0.1.0-alpha.4)에서 수정본 `v0.1.0-alpha.4`의 설치본과 ZIP을 받을 수 있습니다.
+[GitHub Releases](https://github.com/hojin-v/MiniTerm/releases/tag/v0.1.0-alpha.5)에서 수정본 `v0.1.0-alpha.5`의 설치본과 ZIP을 받을 수 있습니다.
 
 | Download | Use |
 | --- | --- |
-| `MiniTerm-0.1.0-alpha.4-windows-x64-setup.exe` | 권장 사용자별 설치. 관리자 권한 불필요 |
-| `MiniTerm-0.1.0-alpha.4-windows-x64.zip` | 압축을 풀고 `miniterm.exe` 실행. 설치·알림 등록은 자동 수행하지 않음 |
+| `MiniTerm-0.1.0-alpha.5-windows-x64-setup.exe` | 권장 사용자별 설치. 관리자 권한 불필요 |
+| `MiniTerm-0.1.0-alpha.5-windows-x64.zip` | 압축을 풀고 `miniterm.exe` 실행. 설치·알림 등록은 자동 수행하지 않음 |
 | `SHA256SUMS` | 다운로드 파일의 무결성 확인 |
 
 Git for Windows와 [Microsoft Visual C++ v14 x64 런타임](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)을 별도로 준비해야 합니다. 실행 파일에서 `VCRUNTIME140.dll` 의존성을 확인했습니다. 설치본은 서명되지 않았으며 Windows에서 게시자를 확인할 수 없다는 안내가 나올 수 있습니다. 백신을 끄거나 경고를 일괄 우회하는 방식은 안내하지 않습니다.
@@ -160,7 +160,7 @@ cd MiniTerm
 ./scripts/cargo.ps1 -CargoArguments @('fmt','--all','--','--check')
 ./scripts/cargo.ps1 -CargoArguments @('clippy','--locked','--all-targets','--','-D','warnings')
 ./scripts/build.ps1
-./scripts/package.ps1 -SkipBuild -ReleaseTag v0.1.0-alpha.4
+./scripts/package.ps1 -SkipBuild -ReleaseTag v0.1.0-alpha.5
 ```
 
 Rust가 없으면 `./scripts/bootstrap-rust.ps1`로 프로젝트 `.tools`에 설치할 수 있습니다. `./scripts/test.ps1 -Pty`는 실제 Git Bash 호환성을 검사하며 현재 알려진 리사이즈 문제가 재현될 수 있습니다. GitHub CI는 이 결과를 별도 기록하고 알파의 한계를 공개합니다.
