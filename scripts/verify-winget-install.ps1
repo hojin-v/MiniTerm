@@ -85,6 +85,7 @@ Invoke-TestWinGet @('install','--manifest',$taskDirectory,'--silent','--location
 $taskEntry = Get-ItemProperty -LiteralPath $taskRegistry
 $taskVersion = [regex]::Match([IO.File]::ReadAllText((Join-Path $taskDirectory 'Hnode.MiniTerm.yaml')), '(?m)^PackageVersion: (\S+)\s*$').Groups[1].Value
 if ($taskEntry.DisplayName -ne 'MiniTerm' -or $taskEntry.Publisher -ne 'Hnode' -or $taskEntry.DisplayVersion -ne $taskVersion -or $taskEntry.InstallLocation -ine $taskInstall) { throw 'Installed Apps & Features metadata does not match the manifest.' }
+if ($taskEntry.QuietUninstallString -ne ('"' + (Join-Path $taskInstall 'Uninstall.exe') + '" /S')) { throw 'WinGet requires the registered NSIS silent removal command.' }
 $taskExe = Join-Path $taskInstall 'miniterm.exe'
 if (-not (Test-Path -LiteralPath $taskExe)) { throw 'The installed executable is missing.' }
 $taskStart = [Diagnostics.ProcessStartInfo]::new()

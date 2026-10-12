@@ -104,6 +104,7 @@ Section "MiniTerm" Main
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniTerm" "Publisher" "Hnode"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniTerm" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniTerm" "UninstallString" '"$INSTDIR\Uninstall.exe"'
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniTerm" "QuietUninstallString" '"$INSTDIR\Uninstall.exe" /S'
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniTerm" "NoModify" 1
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniTerm" "NoRepair" 1
 SectionEnd

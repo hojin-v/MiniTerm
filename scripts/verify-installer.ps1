@@ -63,6 +63,7 @@ function Invoke-NativeInstaller([string]$Executable, [string[]]$Arguments) {
 Invoke-NativeInstaller $taskInstaller @('/S',('/D=' + $taskInstall))
 $taskEntry = Get-ItemProperty -LiteralPath $taskRegistry
 if ($taskEntry.DisplayName -ne 'MiniTerm' -or $taskEntry.Publisher -ne 'Hnode' -or $taskEntry.DisplayVersion -ne $taskVersion -or $taskEntry.InstallLocation -ine $taskInstall) { throw 'Installed Apps & Features metadata is incorrect.' }
+if ($taskEntry.QuietUninstallString -ne ('"' + (Join-Path $taskInstall 'Uninstall.exe') + '" /S')) { throw 'The installer must register the NSIS silent removal command used by WinGet.' }
 Invoke-NativeInstaller (Join-Path $taskInstall 'miniterm.exe') @('--check-update-safe')
 Invoke-NativeInstaller (Join-Path $taskInstall 'Uninstall.exe') @('/S')
 # NSIS copies the uninstaller to a temporary child before deleting its original executable.
