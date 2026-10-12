@@ -1281,7 +1281,7 @@ impl MiniTerm {
                 if !self.settings.window.mini_show_output {
                     usize::from(!summary)
                 } else {
-                    rows.min(2) as usize
+                    rows as usize
                 },
                 !summary,
             )
@@ -1294,6 +1294,18 @@ impl MiniTerm {
             };
             (start..start + rows).map(|r| r - offset as i32).collect()
         };
+        let render_rect = if mini && !summary {
+            Rect::from_min_max(
+                Pos2::new(
+                    rect.left(),
+                    rect.bottom() - (visible_rows.len() as f32 * height).min(rect.height()),
+                ),
+                rect.right_bottom(),
+            )
+        } else {
+            render_rect
+        };
+        self.record_widget("terminal-content", render_rect);
         // Isolated GUI tests observe only the bounds of the known local Codex
         // chooser. No transcript text is exposed through the diagnostic IPC.
         if self.diagnostic_ui.is_some() && !mini && offset == 0 {
@@ -1344,7 +1356,7 @@ impl MiniTerm {
                 Line(
                     visible_rows
                         .get(
-                            ((pos.y - rect.top()) / height)
+                            ((pos.y - render_rect.top()) / height)
                                 .floor()
                                 .clamp(0.0, rows.saturating_sub(1) as f32)
                                 as usize,
@@ -1687,6 +1699,7 @@ impl MiniTerm {
             );
         let cursor_rect = Rect::from_min_size(cursor_pos, Vec2::new(width, height));
         if !summary && cursor.shape != CursorShape::Hidden && rect.contains(cursor_pos) {
+            self.record_widget("terminal-cursor", cursor_rect);
             let color = resolve_color(Color::Named(NamedColor::Cursor), &colors, light);
             match cursor.shape {
                 CursorShape::Beam if focused => {

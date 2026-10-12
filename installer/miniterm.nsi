@@ -25,6 +25,7 @@ ShowInstDetails show
 ShowUninstDetails show
 VIProductVersion "${VERSION}.0"
 VIAddVersionKey "ProductName" "MiniTerm"
+VIAddVersionKey "CompanyName" "Hnode"
 VIAddVersionKey "FileDescription" "MiniTerm per-user installer"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "LegalCopyright" "MiniTerm contributors"
@@ -100,7 +101,7 @@ Section "MiniTerm" Main
   WriteRegStr HKCU "Software\MiniTerm" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniTerm" "DisplayName" "MiniTerm"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniTerm" "DisplayVersion" "${RELEASE_LABEL}"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniTerm" "Publisher" "MiniTerm contributors"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniTerm" "Publisher" "Hnode"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniTerm" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniTerm" "UninstallString" '"$INSTDIR\Uninstall.exe"'
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniTerm" "NoModify" 1

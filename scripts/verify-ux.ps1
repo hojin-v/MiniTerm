@@ -148,6 +148,14 @@ try {
     if (-not $taskSample.details.fixtureSampleReady) { throw 'Fixture ANSI sample did not reach the real VT grid.' }
     $mini=[MiniTermUxProbe]::Bounds($taskWindow)
     Save-ProbeImage 'mini-input-dark.png'
+    $taskInputBody = Get-Widget 'terminal'
+    $taskInputContent = Get-Widget 'terminal-content'
+    $taskInputCursor = Get-Widget 'terminal-cursor'
+    $taskInputRowHeight = $taskInputCursor[3] - $taskInputCursor[1]
+    if ([Math]::Abs($taskInputContent[3] - $taskInputBody[3]) -gt 0.5 -or [Math]::Abs($taskInputCursor[3] - $taskInputBody[3]) -gt 0.5) { throw 'Mini input is not anchored to the bottom of the usable body.' }
+    $taskInputCapacity = [Math]::Floor(($taskInputBody[3] - $taskInputBody[1]) / $taskInputRowHeight)
+    $taskInputVisibleRows = [Math]::Round(($taskInputContent[3] - $taskInputContent[1]) / $taskInputRowHeight)
+    if ($taskInputCapacity -gt 2 -and $taskInputVisibleRows -le 2) { throw 'Mini input still limits the available output preview to two rows.' }
     $corner=0
     if ([MiniTermUxProbe]::DwmGetWindowAttribute($taskWindow,33,[ref]$corner,4) -ne 0 -or $corner -ne 3) { throw 'Small compositor corners were not configured.' }
     if ($Transparency -gt 0) {
@@ -400,6 +408,7 @@ try {
     $result.foregroundChangedExternally=-not $taskForegroundPreserved
     $result.focusObservationScope='Startup metric and final foreground observation only. An unrelated foreground change does not prove the preview stole focus; uninterrupted focus is unverified in that case.'
     $result.sessionCount=$SessionCount
+    $result.miniInput=@{bottomAnchored=$true;availableRows=$taskInputCapacity;visibleRows=$taskInputVisibleRows;scope='Actual VT sample with three output rows and its prompt; observes rendered cursor/content bounds.'}
     $result.summaryCaptures=[bool]$SummarySample
     $result.bodyCollapsePositions=@('top','middle','bottom')
     $result.legacyFalsePreferenceIgnored=$true
