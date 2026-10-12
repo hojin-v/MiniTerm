@@ -1,5 +1,5 @@
 param(
-    [string]$ManifestDirectory = 'winget/manifests/h/hojin-v/MiniTerm/0.1.0-alpha.1',
+    [string]$ManifestDirectory = 'winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.2',
     [switch]$VerifyInstaller
 )
 $ErrorActionPreference = 'Stop'
@@ -16,7 +16,7 @@ $taskValidationOutput = & winget validate --manifest $taskDirectory --disable-in
 $taskValidationExit = $LASTEXITCODE
 $taskValidationOutput | ForEach-Object { Write-Output $_ }
 if ($taskValidationExit -ne 0) { throw ('WinGet manifest validation failed, exit ' + $taskValidationExit + ': ' + ($taskValidationOutput -join "`n")) }
-$taskManifest = Get-Content -LiteralPath (Join-Path $taskDirectory 'hojin-v.MiniTerm.installer.yaml') -Raw -Encoding UTF8
+$taskManifest = Get-Content -LiteralPath (Join-Path $taskDirectory 'Hnode.MiniTerm.installer.yaml') -Raw -Encoding UTF8
 function Read-Field([string]$Name) {
     $taskMatches = [regex]::Matches($taskManifest, ('(?m)^\s*' + [regex]::Escape($Name) + ':\s*(\S+)\s*$'))
     if ($taskMatches.Count -ne 1) { throw "Expected exactly one $Name." }
@@ -34,4 +34,4 @@ if ($VerifyInstaller) {
     if ((Get-FileHash -LiteralPath $taskDownload -Algorithm SHA256).Hash -ine $taskHash) { throw 'Published WinGet installer checksum mismatch.' }
     Write-Output "Verified publisher installer SHA256: $taskHash"
 }
-Write-Output "Validated hojin-v.MiniTerm $taskVersion. No installation or WinGet settings changes performed."
+Write-Output "Validated Hnode.MiniTerm $taskVersion. No installation or WinGet settings changes performed."

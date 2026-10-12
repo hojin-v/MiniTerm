@@ -12,13 +12,13 @@ if ($taskInstaller.Count -ne 1 -or $taskInstaller[0].state -ne 'uploaded' -or $t
 $taskHash = $Matches[1].ToUpperInvariant()
 $taskExpectedUrl = "https://github.com/hojin-v/MiniTerm/releases/download/$ReleaseTag/$taskName"
 if ($taskInstaller[0].browser_download_url -ne $taskExpectedUrl) { throw 'Unexpected installer URL.' }
-$taskTemplateVersion = '0.1.0-alpha.1'
-$taskTemplate = Join-Path $taskRoot "winget/manifests/h/hojin-v/MiniTerm/$taskTemplateVersion"
-$taskOutput = Join-Path $taskRoot "artifacts/winget/manifests/h/hojin-v/MiniTerm/$taskVersion"
+$taskTemplateVersion = '0.1.0-alpha.2'
+$taskTemplate = Join-Path $taskRoot "winget/manifests/h/Hnode/MiniTerm/$taskTemplateVersion"
+$taskOutput = Join-Path $taskRoot "artifacts/winget/manifests/h/Hnode/MiniTerm/$taskVersion"
 New-Item -ItemType Directory -Path $taskOutput -Force | Out-Null
 foreach ($taskFile in Get-ChildItem -LiteralPath $taskTemplate -Filter '*.yaml' -File) {
     $taskText = [IO.File]::ReadAllText($taskFile.FullName).Replace($taskTemplateVersion, $taskVersion)
-    if ($taskFile.Name -eq 'hojin-v.MiniTerm.installer.yaml') { $taskText = [regex]::Replace($taskText, '(?m)^(\s*InstallerSha256: )[^\r\n]+', ('${1}' + $taskHash)) }
+    if ($taskFile.Name -eq 'Hnode.MiniTerm.installer.yaml') { $taskText = [regex]::Replace($taskText, '(?m)^(\s*InstallerSha256: )[^\r\n]+', ('${1}' + $taskHash)) }
     [IO.File]::WriteAllText((Join-Path $taskOutput $taskFile.Name), $taskText, [Text.UTF8Encoding]::new($false))
 }
 & (Join-Path $PSScriptRoot 'verify-winget.ps1') -ManifestDirectory $taskOutput -VerifyInstaller

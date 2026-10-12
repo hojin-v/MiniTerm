@@ -1,5 +1,5 @@
 param(
-    [string]$ManifestDirectory = 'winget/manifests/h/hojin-v/MiniTerm/0.1.0-alpha.1',
+    [string]$ManifestDirectory = 'winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.2',
     [string]$GhPath = '',
     [switch]$ValidateOnly,
     [switch]$Draft
@@ -9,12 +9,12 @@ $taskRoot = Split-Path -Parent $PSScriptRoot
 $taskDirectory = if ([IO.Path]::IsPathRooted($ManifestDirectory)) { $ManifestDirectory } else { Join-Path $taskRoot $ManifestDirectory }
 & (Join-Path $PSScriptRoot 'verify-winget.ps1') -ManifestDirectory $taskDirectory -VerifyInstaller
 $taskFiles = @(Get-ChildItem -LiteralPath $taskDirectory -File)
-$taskExpected = @('hojin-v.MiniTerm.yaml','hojin-v.MiniTerm.installer.yaml','hojin-v.MiniTerm.locale.en-US.yaml','hojin-v.MiniTerm.locale.ko-KR.yaml')
+$taskExpected = @('Hnode.MiniTerm.yaml','Hnode.MiniTerm.installer.yaml','Hnode.MiniTerm.locale.en-US.yaml','Hnode.MiniTerm.locale.ko-KR.yaml')
 if ($taskFiles.Count -ne 4 -or @($taskFiles | Where-Object { $_.Name -notin $taskExpected }).Count) { throw 'Only the four MiniTerm manifests may be submitted.' }
-$taskVersion = [regex]::Match([IO.File]::ReadAllText((Join-Path $taskDirectory 'hojin-v.MiniTerm.yaml')), '(?m)^PackageVersion: (\S+)\s*$').Groups[1].Value
+$taskVersion = [regex]::Match([IO.File]::ReadAllText((Join-Path $taskDirectory 'Hnode.MiniTerm.yaml')), '(?m)^PackageVersion: (\S+)\s*$').Groups[1].Value
 if ($taskVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[1-9][0-9]*$') { throw 'Invalid package version.' }
-$taskTitle = "New package: hojin-v.MiniTerm version $taskVersion"
-$taskBody = [IO.File]::ReadAllText((Join-Path $taskRoot 'docs/WINGET_PR.md')).Replace('0.1.0-alpha.1', $taskVersion)
+$taskTitle = "New package: Hnode.MiniTerm version $taskVersion"
+$taskBody = [IO.File]::ReadAllText((Join-Path $taskRoot 'docs/WINGET_PR.md')).Replace('0.1.0-alpha.2', $taskVersion)
 $taskArtifacts = Join-Path $taskRoot 'artifacts/winget-preparation'
 New-Item -ItemType Directory -Path $taskArtifacts -Force | Out-Null
 $taskBodyPath = Join-Path $taskArtifacts 'pull-request.md'
@@ -38,8 +38,8 @@ function Post-GhJson([string]$Path, $Body) {
     return (Invoke-GhJson @('api','--hostname','github.com','--method','POST',$Path,'--input',$taskJsonPath))
 }
 $taskUser = Invoke-GhJson @('api','--hostname','github.com','user')
-$taskSearch = Invoke-GhJson @('api','--hostname','github.com','--method','GET','search/issues','-f',('q=repo:microsoft/winget-pkgs is:pr is:open "hojin-v.MiniTerm" "' + $taskVersion + '"'))
-$taskDuplicates = @($taskSearch.items | Where-Object { $_.title -like '*hojin-v.MiniTerm*' -and $_.title -like ('*' + $taskVersion + '*') })
+$taskSearch = Invoke-GhJson @('api','--hostname','github.com','--method','GET','search/issues','-f',('q=repo:microsoft/winget-pkgs is:pr is:open "Hnode.MiniTerm" "' + $taskVersion + '"'))
+$taskDuplicates = @($taskSearch.items | Where-Object { $_.title -like '*Hnode.MiniTerm*' -and $_.title -like ('*' + $taskVersion + '*') })
 if ($taskDuplicates.Count) { Write-Output ('An open registration PR already exists: ' + $taskDuplicates[0].html_url); return }
 $taskBody = $taskBody.Replace('- [ ] Checked that there aren''t other open pull requests', '- [x] Checked that there aren''t other open pull requests')
 $taskCiHeaders = @{Accept='application/vnd.github+json';'User-Agent'='MiniTerm-winget-submission'}
@@ -55,7 +55,7 @@ $taskEvidence = Get-Content -LiteralPath (Join-Path $taskEvidenceDirectory $task
 $taskManifestHashes = $taskFiles | Sort-Object Name | ForEach-Object { $_.Name + ':' + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
 $taskHasher = [Security.Cryptography.SHA256]::Create()
 try { $taskManifestHash = [BitConverter]::ToString($taskHasher.ComputeHash([Text.Encoding]::UTF8.GetBytes(($taskManifestHashes -join "`n") + "`n"))).Replace('-', '').ToLowerInvariant() } finally { $taskHasher.Dispose() }
-if ($taskEvidence.packageIdentifier -ne 'hojin-v.MiniTerm' -or $taskEvidence.packageVersion -ne $taskVersion -or $taskEvidence.manifestSha256 -ne $taskManifestHash -or -not $taskEvidence.installed -or -not $taskEvidence.uninstalled -or -not $taskEvidence.settingsPreserved -or -not $taskEvidence.executableLoaded) { throw 'CI evidence does not match these manifests and the required installer behavior.' }
+if ($taskEvidence.packageIdentifier -ne 'Hnode.MiniTerm' -or $taskEvidence.packageVersion -ne $taskVersion -or $taskEvidence.manifestSha256 -ne $taskManifestHash -or -not $taskEvidence.installed -or -not $taskEvidence.uninstalled -or -not $taskEvidence.settingsPreserved -or -not $taskEvidence.executableLoaded) { throw 'CI evidence does not match these manifests and the required installer behavior.' }
 if ($Draft) {
     $taskBody += "`n`nDraft validation status: the hash-verified publisher NSIS installer passed unattended installation, executable loading, removal and settings preservation. Local WinGet installation in headless CI waited at SmartScreen before the installer started; WinGet installation is not marked passed. Catalog validation and Microsoft review remain pending.`n"
 } else {
@@ -74,7 +74,7 @@ $taskBaseCommit = Invoke-GhJson @('api','--hostname','github.com',('repos/micros
 $taskTreeEntries = @()
 foreach ($taskFile in $taskFiles) {
     $taskBlob = Post-GhJson ('repos/' + $taskFork + '/git/blobs') @{content=[IO.File]::ReadAllText($taskFile.FullName);encoding='utf-8'}
-    $taskTreeEntries += @{path=('manifests/h/hojin-v/MiniTerm/' + $taskVersion + '/' + $taskFile.Name);mode='100644';type='blob';sha=$taskBlob.sha}
+    $taskTreeEntries += @{path=('manifests/h/Hnode/MiniTerm/' + $taskVersion + '/' + $taskFile.Name);mode='100644';type='blob';sha=$taskBlob.sha}
 }
 $taskTree = Post-GhJson ('repos/' + $taskFork + '/git/trees') @{base_tree=$taskBaseCommit.tree.sha;tree=$taskTreeEntries}
 $taskAuthor = @{name=$taskUser.login;email=([string]$taskUser.id + '+' + $taskUser.login + '@users.noreply.github.com')}
@@ -82,6 +82,6 @@ $taskCommit = Post-GhJson ('repos/' + $taskFork + '/git/commits') @{message=$tas
 $taskBranch = 'miniterm-' + $taskVersion + '-' + [guid]::NewGuid().ToString('N').Substring(0,8)
 Post-GhJson ('repos/' + $taskFork + '/git/refs') @{ref=('refs/heads/' + $taskBranch);sha=$taskCommit.sha} | Out-Null
 $taskPr = Post-GhJson 'repos/microsoft/winget-pkgs/pulls' @{title=$taskTitle;body=$taskBody;head=($taskUser.login + ':' + $taskBranch);base=$taskUpstream.default_branch;maintainer_can_modify=$true;draft=[bool]$Draft}
-$taskResult = @{packageIdentifier='hojin-v.MiniTerm';packageVersion=$taskVersion;pullRequestUrl=$taskPr.html_url;pullRequestNumber=$taskPr.number;fork=$taskFork;branch=$taskBranch;draft=[bool]$Draft;status='submitted; awaiting validation, review and catalog publication'}
+$taskResult = @{packageIdentifier='Hnode.MiniTerm';packageVersion=$taskVersion;pullRequestUrl=$taskPr.html_url;pullRequestNumber=$taskPr.number;fork=$taskFork;branch=$taskBranch;draft=[bool]$Draft;status='submitted; awaiting validation, review and catalog publication'}
 [IO.File]::WriteAllText((Join-Path $taskRoot 'artifacts/WINGET_SUBMISSION.json'), ($taskResult | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
 Write-Output $taskPr.html_url

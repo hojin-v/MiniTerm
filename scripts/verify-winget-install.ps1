@@ -1,4 +1,4 @@
-param([string]$ManifestDirectory = 'winget/manifests/h/hojin-v/MiniTerm/0.1.0-alpha.1')
+param([string]$ManifestDirectory = 'winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.2')
 $ErrorActionPreference = 'Stop'
 trap {
     if ($env:GITHUB_ACTIONS -eq 'true') {
@@ -83,8 +83,8 @@ $taskSettingsHash = (Get-FileHash -LiteralPath $taskSettings -Algorithm SHA256).
 if ($LASTEXITCODE -ne 0) { throw 'Cannot enable local manifest testing in the ephemeral runner.' }
 Invoke-TestWinGet @('install','--manifest',$taskDirectory,'--silent','--location',$taskInstall,'--dependency-source','winget','--disable-interactivity','--accept-source-agreements','--accept-package-agreements')
 $taskEntry = Get-ItemProperty -LiteralPath $taskRegistry
-$taskVersion = [regex]::Match([IO.File]::ReadAllText((Join-Path $taskDirectory 'hojin-v.MiniTerm.yaml')), '(?m)^PackageVersion: (\S+)\s*$').Groups[1].Value
-if ($taskEntry.DisplayName -ne 'MiniTerm' -or $taskEntry.Publisher -ne 'MiniTerm contributors' -or $taskEntry.DisplayVersion -ne $taskVersion -or $taskEntry.InstallLocation -ine $taskInstall) { throw 'Installed Apps & Features metadata does not match the manifest.' }
+$taskVersion = [regex]::Match([IO.File]::ReadAllText((Join-Path $taskDirectory 'Hnode.MiniTerm.yaml')), '(?m)^PackageVersion: (\S+)\s*$').Groups[1].Value
+if ($taskEntry.DisplayName -ne 'MiniTerm' -or $taskEntry.Publisher -ne 'Hnode' -or $taskEntry.DisplayVersion -ne $taskVersion -or $taskEntry.InstallLocation -ine $taskInstall) { throw 'Installed Apps & Features metadata does not match the manifest.' }
 $taskExe = Join-Path $taskInstall 'miniterm.exe'
 if (-not (Test-Path -LiteralPath $taskExe)) { throw 'The installed executable is missing.' }
 $taskStart = [Diagnostics.ProcessStartInfo]::new()
@@ -102,7 +102,7 @@ if ((Get-FileHash -LiteralPath $taskSettings -Algorithm SHA256).Hash -ne $taskSe
 $taskManifestHashes = Get-ChildItem -LiteralPath $taskDirectory -File -Filter '*.yaml' | Sort-Object Name | ForEach-Object { $_.Name + ':' + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
 $taskHasher = [Security.Cryptography.SHA256]::Create()
 try { $taskManifestHash = [BitConverter]::ToString($taskHasher.ComputeHash([Text.Encoding]::UTF8.GetBytes(($taskManifestHashes -join "`n") + "`n"))).Replace('-', '').ToLowerInvariant() } finally { $taskHasher.Dispose() }
-$taskResult = @{ packageIdentifier='hojin-v.MiniTerm'; packageVersion=$taskEntry.DisplayVersion; manifestSha256=$taskManifestHash; sourceCommit=$env:GITHUB_SHA; installed=$true; uninstalled=$true; settingsPreserved=$true; executableLoaded=$true; scope='WinGet local-manifest install with package dependencies and removal on an ephemeral Windows runner. No physical GUI, IME, account or model validation.' }
+$taskResult = @{ packageIdentifier='Hnode.MiniTerm'; packageVersion=$taskEntry.DisplayVersion; manifestSha256=$taskManifestHash; sourceCommit=$env:GITHUB_SHA; installed=$true; uninstalled=$true; settingsPreserved=$true; executableLoaded=$true; scope='WinGet local-manifest install with package dependencies and removal on an ephemeral Windows runner. No physical GUI, IME, account or model validation.' }
 New-Item -ItemType Directory -Path (Join-Path $taskRoot 'artifacts') -Force | Out-Null
 [IO.File]::WriteAllText((Join-Path $taskRoot 'artifacts/winget-install-verification.json'), ($taskResult | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
 Write-Output ('::notice title=WinGet installation verified::' + ($taskResult | ConvertTo-Json -Compress))

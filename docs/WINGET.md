@@ -1,10 +1,10 @@
 # WinGet 공식 카탈로그 배포
 
-사용자에게 안내하는 설치 명령은 **`winget install miniterm`**이다. 매니페스트의 이름은 `MiniTerm`, 별칭은 `miniterm`으로 설정했다. 등록용 패키지 ID는 `hojin-v.MiniTerm`이며 일반 설치 명령에는 입력할 필요가 없다. 현재 `0.1.0-alpha.1`의 제출용 매니페스트를 준비했다. Microsoft `winget-pkgs`의 등록 PR이 병합되고 카탈로그에 반영되기 전에는 일반 검색·설치를 제공한다고 표시하지 않는다. 매니페스트를 이 저장소에 올리는 것만으로 공식 등록이 완료되지는 않는다.
+사용자에게 안내하는 설치 명령은 **`winget install miniterm`**이다. 매니페스트의 이름은 `MiniTerm`, 별칭은 `miniterm`으로 설정했다. 등록용 패키지 ID는 `Hnode.MiniTerm`이며 일반 설치 명령에는 입력할 필요가 없다. 현재 `0.1.0-alpha.2`의 제출용 매니페스트를 준비했다. Microsoft `winget-pkgs`의 등록 PR이 병합되고 카탈로그에 반영되기 전에는 일반 검색·설치를 제공한다고 표시하지 않는다. 매니페스트를 이 저장소에 올리는 것만으로 공식 등록이 완료되지는 않는다.
 
-매니페스트·공개 설치 파일 해시 검증은 통과했다. 임시 CI의 로컬 매니페스트 설치는 SmartScreen 확인 단계에서 대기해 완료하지 못했다. 별도 `/S` 기능 검사에서는 공개 설치본의 설치·앱 로딩·제거·설정 보존을 확인했다.
+등록 ID는 `Hnode.MiniTerm`, 매니페스트와 설치 프로그램의 게시자는 `Hnode`다. 기본 검색은 대소문자를 구분하지 않으므로 `winget install hnode.miniterm`도 같은 패키지를 선택한다.
 
-2026-10-12에 GitHub CLI 인증과 [Draft PR #450836](https://github.com/microsoft/winget-pkgs/pull/450836) 제출을 확인했다. 제출된 네 파일의 Git blob 해시는 현재 저장소의 매니페스트와 모두 일치한다. Microsoft의 PR 형식·매니페스트·URL·도메인·카탈로그 내용·설치본 스캔과 `license/cla` 검사는 통과했다. 설치·메타데이터 등 나머지 검증은 진행 또는 대기 중이다. 정책 검사는 `NEUTRAL`로 종료됐고, 검사 로그에서 수동 검토가 필요함을 확인했다. 아직 병합되거나 카탈로그에 게시된 상태는 아니다. 최신 결과는 PR의 검사·댓글에서 확인한다.
+2026-10-12에 GitHub CLI 인증과 [등록 PR #450836](https://github.com/microsoft/winget-pkgs/pull/450836) 제출을 확인했다. 이후 게시자 Hnode와 입력 하단 정렬·메모리 수정본 alpha.2로 갱신을 준비한다. 계정 소유자의 CLA 동의는 Microsoft가 확인했다. 초기 제출의 PR 형식·매니페스트·URL·도메인·카탈로그 내용·설치본 스캔은 통과했으나, 새 버전은 새 설치 파일 해시로 다시 검증한다. 정책의 수동 검토, Microsoft 승인·병합·카탈로그 반영이 남아 있다. 최신 결과는 PR의 검사·댓글에서 확인한다.
 
 ## 등록 후 설치·업데이트·제거
 
@@ -21,7 +21,7 @@ Windows 11 x64가 필요하다. MiniTerm은 사용자별 설치이고, Git·Visu
 
 ## 제출 파일과 검증
 
-[`winget/manifests/h/hojin-v/MiniTerm/0.1.0-alpha.1`](../winget/manifests/h/hojin-v/MiniTerm/0.1.0-alpha.1)에 버전·설치·영어·한국어 매니페스트 네 개를 보관한다. 커뮤니티 저장소에는 이 경로에서 `winget/` 접두사를 뺀 `manifests/h/hojin-v/MiniTerm/0.1.0-alpha.1`로 제출한다.
+[`winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.2`](../winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.2)에 버전·설치·영어·한국어 매니페스트 네 개를 보관한다. 커뮤니티 저장소에는 이 경로에서 `winget/` 접두사를 뺀 `manifests/h/Hnode/MiniTerm/0.1.0-alpha.2`로 제출한다.
 
 - 스키마 1.12.0, `nullsoft`, x64, 사용자 범위, Windows 11 최소 빌드
 - 공개된 버전별 NSIS 설치 URL과 실제 설치 파일 SHA256
@@ -31,7 +31,7 @@ Windows 11 x64가 필요하다. MiniTerm은 사용자별 설치이고, Git·Visu
 
 ```powershell
 ./scripts/verify-winget.ps1 -VerifyInstaller
-./scripts/prepare-winget.ps1 -ReleaseTag v0.1.0-alpha.1
+./scripts/prepare-winget.ps1 -ReleaseTag v0.1.0-alpha.2
 ./scripts/submit-winget.ps1 -ValidateOnly
 ```
 
@@ -49,8 +49,8 @@ Windows 11 x64가 필요하다. MiniTerm은 사용자별 설치이고, Git·Visu
 - [x] 등록 PR 본문과 제출 도구 준비
 - [x] 계정 소유자의 GitHub CLI 인증
 - [x] 미완료 검증을 명시한 Draft PR 제출: [#450836](https://github.com/microsoft/winget-pkgs/pull/450836)
-- [x] 제출 파일 네 개가 현재 매니페스트와 일치하는지 확인
-- [x] Microsoft의 PR 형식·매니페스트·URL 검사 통과
+- [ ] 갱신한 제출 파일 네 개가 현재 매니페스트와 일치하는지 확인
+- [ ] 갱신한 매니페스트와 새 공개 설치 파일의 해시·설치 검증
 - [x] 계정 소유자의 CLA 동의 댓글과 Microsoft `license/cla` 검사 통과 확인
 - [ ] Windows Sandbox 등 대화형 환경 또는 Microsoft의 PR 설치 검증으로 WinGet 설치를 확인하고 지적된 오류 수정
 - [ ] 설치 검증과 저자가 수정할 오류를 해결한 뒤 일반 PR 전환
@@ -78,9 +78,9 @@ SSH로 이 저장소를 push할 수 있는 것과 GitHub API로 fork·PR을 만�
 
 1. 검증과 CI 결과를 확인하고 같은 패키지·버전의 열린 PR이 없는지 확인한다.
 2. GitHub에 로그인한 계정으로 `microsoft/winget-pkgs`를 fork하고 네 파일만 새 브랜치에 추가한다.
-3. 제목 `New package: hojin-v.MiniTerm version 0.1.0-alpha.1`로 PR을 제출한다. [PR 본문](WINGET_PR.md)의 검사 항목은 실제 결과에 맞게 표시한다.
+3. 제목 `New package: Hnode.MiniTerm version 0.1.0-alpha.2`로 PR을 제출한다. [PR 본문](WINGET_PR.md)의 검사 항목은 실제 결과에 맞게 표시한다.
 4. Microsoft 봇과 검토자의 결과를 확인한다. CLA 동의가 요청되면 계정 소유자가 직접 확인하고 서명한다. 인증 토큰을 소스·로그·PR에 넣지 않는다.
-5. 병합과 카탈로그 반영 후 `winget show miniterm`과 `winget show MiniTerm`이 공식 패키지로 연결되는지 확인한다. `winget install miniterm`으로 설치하고 업데이트도 확인한 뒤 README의 상태를 갱신한다. 자동 검사에서 등록 ID와 소스를 엄격하게 확인할 때는 `winget show --id hojin-v.MiniTerm --exact --source winget`을 사용한다.
+5. 병합과 카탈로그 반영 후 `winget show miniterm`과 `winget show MiniTerm`이 공식 패키지로 연결되는지 확인한다. `winget install miniterm`으로 설치하고 업데이트도 확인한 뒤 README의 상태를 갱신한다. 자동 검사에서 등록 ID와 소스를 엄격하게 확인할 때는 `winget show --id Hnode.MiniTerm --exact --source winget`을 사용한다.
 
 GitHub CLI 로그인과 WinGet CI 성공 후 `./scripts/submit-winget.ps1`로 제출할 수 있다. 도구는 열린 중복 PR을 확인하고, 계정의 fork에 새 브랜치를 만들어 네 파일만 제출한다. 기존 fork의 브랜치를 덮어쓰지 않는다. `-ValidateOnly`는 제출 내용을 확인하며 GitHub 인증·fork·PR 생성을 수행하지 않는다.
 

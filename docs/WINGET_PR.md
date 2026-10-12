@@ -1,12 +1,12 @@
 ## Description
 
-New package: `hojin-v.MiniTerm` version `0.1.0-alpha.1`.
+New package: `Hnode.MiniTerm` version `0.1.0-alpha.2`.
 
 MiniTerm is an open-source native Bash terminal HUD for Windows 11 x64. This is a tester alpha; its package descriptions and publisher release notes disclose the known resize/input and performance limitations.
 
 The manifest uses the publisher's immutable GitHub Release NSIS installer, user scope, `/S`, the actual Apps & Features publisher/name/version/product key, and package dependencies on `Git.Git` and `Microsoft.VCRedist.2015+.x64`. Installer exit codes preserve running-session and missing-runtime failures.
 
-Publisher release: https://github.com/hojin-v/MiniTerm/releases/tag/v0.1.0-alpha.1
+Publisher release: https://github.com/hojin-v/MiniTerm/releases/tag/v0.1.0-alpha.2
 
 ## Checklist
 

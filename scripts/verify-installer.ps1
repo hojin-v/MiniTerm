@@ -1,4 +1,4 @@
-param([string]$ManifestDirectory = 'winget/manifests/h/hojin-v/MiniTerm/0.1.0-alpha.1')
+param([string]$ManifestDirectory = 'winget/manifests/h/Hnode/MiniTerm/0.1.0-alpha.2')
 $ErrorActionPreference = 'Stop'
 trap {
     if ($env:GITHUB_ACTIONS -eq 'true') {
@@ -12,7 +12,7 @@ $taskRegistry = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniT
 if ((Test-Path $taskRegistry) -or (Get-Process miniterm -ErrorAction SilentlyContinue)) { throw 'A pre-existing MiniTerm installation/session must not be modified.' }
 $taskRoot = Split-Path -Parent $PSScriptRoot
 $taskDirectory = if ([IO.Path]::IsPathRooted($ManifestDirectory)) { $ManifestDirectory } else { Join-Path $taskRoot $ManifestDirectory }
-$taskManifest = [IO.File]::ReadAllText((Join-Path $taskDirectory 'hojin-v.MiniTerm.installer.yaml'))
+$taskManifest = [IO.File]::ReadAllText((Join-Path $taskDirectory 'Hnode.MiniTerm.installer.yaml'))
 $taskVersion = [regex]::Match($taskManifest, '(?m)^PackageVersion: (\S+)\s*$').Groups[1].Value
 if ($taskVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[1-9][0-9]*$') { throw 'Expected an explicit alpha version.' }
 $taskExpectedHash = [regex]::Match($taskManifest, '(?m)^\s*InstallerSha256: ([A-Fa-f0-9]{64})\s*$').Groups[1].Value
@@ -49,7 +49,7 @@ function Invoke-NativeInstaller([string]$Executable, [string[]]$Arguments) {
 }
 Invoke-NativeInstaller $taskInstaller @('/S',('/D=' + $taskInstall))
 $taskEntry = Get-ItemProperty -LiteralPath $taskRegistry
-if ($taskEntry.DisplayName -ne 'MiniTerm' -or $taskEntry.Publisher -ne 'MiniTerm contributors' -or $taskEntry.DisplayVersion -ne $taskVersion -or $taskEntry.InstallLocation -ine $taskInstall) { throw 'Installed Apps & Features metadata is incorrect.' }
+if ($taskEntry.DisplayName -ne 'MiniTerm' -or $taskEntry.Publisher -ne 'Hnode' -or $taskEntry.DisplayVersion -ne $taskVersion -or $taskEntry.InstallLocation -ine $taskInstall) { throw 'Installed Apps & Features metadata is incorrect.' }
 Invoke-NativeInstaller (Join-Path $taskInstall 'miniterm.exe') @('--check-update-safe')
 Invoke-NativeInstaller (Join-Path $taskInstall 'Uninstall.exe') @('/S')
 # NSIS copies the uninstaller to a temporary child before deleting its original executable.
@@ -60,7 +60,7 @@ if ((Test-Path $taskRegistry) -or (Test-Path -LiteralPath (Join-Path $taskInstal
 $taskManifestHashes = Get-ChildItem -LiteralPath $taskDirectory -File -Filter '*.yaml' | Sort-Object Name | ForEach-Object { $_.Name + ':' + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
 $taskHasher = [Security.Cryptography.SHA256]::Create()
 try { $taskManifestHash = [BitConverter]::ToString($taskHasher.ComputeHash([Text.Encoding]::UTF8.GetBytes(($taskManifestHashes -join "`n") + "`n"))).Replace('-', '').ToLowerInvariant() } finally { $taskHasher.Dispose() }
-$taskResult = @{packageIdentifier='hojin-v.MiniTerm';packageVersion=$taskVersion;manifestSha256=$taskManifestHash;installerSha256=$taskExpectedHash.ToLowerInvariant();installed=$true;uninstalled=$true;settingsPreserved=$true;executableLoaded=$true;sourceCommit=$env:GITHUB_SHA;scope='Independent /S functional test of the hash-verified publisher NSIS installer on an ephemeral Windows runner. Does not prove WinGet catalog installation or SmartScreen reputation.'}
+$taskResult = @{packageIdentifier='Hnode.MiniTerm';packageVersion=$taskVersion;manifestSha256=$taskManifestHash;installerSha256=$taskExpectedHash.ToLowerInvariant();installed=$true;uninstalled=$true;settingsPreserved=$true;executableLoaded=$true;sourceCommit=$env:GITHUB_SHA;scope='Independent /S functional test of the hash-verified publisher NSIS installer on an ephemeral Windows runner. Does not prove WinGet catalog installation or SmartScreen reputation.'}
 New-Item -ItemType Directory -Path (Join-Path $taskRoot 'artifacts') -Force | Out-Null
 [IO.File]::WriteAllText((Join-Path $taskRoot 'artifacts/native-installer-verification.json'), ($taskResult | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
 Write-Output ('::notice title=Native installer verified::' + ($taskResult | ConvertTo-Json -Compress))
