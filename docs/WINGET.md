@@ -2,7 +2,9 @@
 
 사용자에게 안내하는 설치 명령은 **`winget install miniterm`**이다. 매니페스트의 이름은 `MiniTerm`, 별칭은 `miniterm`으로 설정했다. 등록용 패키지 ID는 `hojin-v.MiniTerm`이며 일반 설치 명령에는 입력할 필요가 없다. 현재 `0.1.0-alpha.1`의 제출용 매니페스트를 준비했다. Microsoft `winget-pkgs`의 등록 PR이 병합되고 카탈로그에 반영되기 전에는 일반 검색·설치를 제공한다고 표시하지 않는다. 매니페스트를 이 저장소에 올리는 것만으로 공식 등록이 완료되지는 않는다.
 
-매니페스트·공개 설치 파일 해시 검증은 통과했다. 임시 CI의 로컬 매니페스트 설치는 SmartScreen 확인 단계에서 대기해 완료하지 못했다. 별도 `/S` 기능 검사에서는 공개 설치본의 설치·앱 로딩·제거·설정 보존을 확인했다. 현재 GitHub CLI 인증도 없어 등록 PR을 아직 제출하지 않았다.
+매니페스트·공개 설치 파일 해시 검증은 통과했다. 임시 CI의 로컬 매니페스트 설치는 SmartScreen 확인 단계에서 대기해 완료하지 못했다. 별도 `/S` 기능 검사에서는 공개 설치본의 설치·앱 로딩·제거·설정 보존을 확인했다.
+
+2026-10-12에 GitHub CLI 인증과 [Draft PR #450836](https://github.com/microsoft/winget-pkgs/pull/450836) 제출을 확인했다. 제출된 네 파일의 Git blob 해시는 현재 저장소의 매니페스트와 모두 일치한다. Microsoft의 PR 형식·매니페스트·URL 검사는 통과했고, 설치·보안 등 나머지 검증은 진행 또는 대기 중이다. 계정 소유자의 CLA 동의가 필요해 `Needs-CLA`가 표시되어 있다. 아직 병합되거나 카탈로그에 게시된 상태는 아니다. 최신 결과는 PR의 검사·댓글에서 확인한다.
 
 ## 등록 후 설치·업데이트·제거
 
@@ -45,14 +47,17 @@ Windows 11 x64가 필요하다. MiniTerm은 사용자별 설치이고, Git·Visu
 - [x] 매니페스트 네 개 작성 및 `winget validate` 통과
 - [x] 공개 설치본의 독립 무인 설치·앱 로딩·제거·설정 보존 검사
 - [x] 등록 PR 본문과 제출 도구 준비
-- [ ] 계정 소유자의 GitHub CLI 인증
-- [ ] 미완료 검증을 명시한 Draft PR 제출
+- [x] 계정 소유자의 GitHub CLI 인증
+- [x] 미완료 검증을 명시한 Draft PR 제출: [#450836](https://github.com/microsoft/winget-pkgs/pull/450836)
+- [x] 제출 파일 네 개가 현재 매니페스트와 일치하는지 확인
+- [x] Microsoft의 PR 형식·매니페스트·URL 검사 통과
+- [ ] 계정 소유자가 요청된 CLA를 검토하고 본인 상황에 맞는 동의 댓글 작성
 - [ ] Windows Sandbox 등 대화형 환경에서 WinGet 설치·제거 확인 및 Microsoft 검증 결과에 따른 수정
-- [ ] 검증 완료 후 일반 PR 전환, 요청 시 계정 소유자의 CLA 서명
+- [ ] 검증 완료 후 일반 PR 전환
 - [ ] Microsoft 승인·병합 및 카탈로그 반영
 - [ ] 이름·별칭으로 공식 패키지가 검색되는지 확인하고 설치·업데이트 검증 및 README의 등록 상태 갱신
 
-이 작업 공간에는 GitHub CLI를 `.tools/github-cli/bin/gh.exe`에 준비했다. 프로젝트 루트에서 다음 명령을 실행하고 브라우저의 인증을 완료한다. 시스템에 GitHub CLI를 설치한 경우 같은 옵션으로 `gh auth login`을 사용할 수 있다.
+GitHub CLI 인증과 Draft 제출은 이 작업 공간에서 완료했다. 다른 장치에서 같은 절차를 재현할 때는 아래 인증·제출 명령을 참고한다. 이 작업 공간에는 GitHub CLI를 `.tools/github-cli/bin/gh.exe`에 준비했다. 시스템에 GitHub CLI를 설치한 경우 같은 옵션으로 `gh auth login`을 사용할 수 있다.
 
 ```powershell
 ./.tools/github-cli/bin/gh.exe auth login --hostname github.com --git-protocol ssh --web --skip-ssh-key
@@ -60,11 +65,13 @@ Windows 11 x64가 필요하다. MiniTerm은 사용자별 설치이고, Git·Visu
 
 SSH로 이 저장소를 push할 수 있는 것과 GitHub API로 fork·PR을 만드는 인증은 별개다. 이 명령은 새 SSH 키 등록 단계를 건너뛰고 GitHub CLI의 브라우저 인증을 진행한다. 토큰을 대화나 저장소 파일에 붙여 넣지 않는다. [GitHub CLI 인증 문서](https://cli.github.com/manual/gh_auth_login)를 참고한다.
 
-현재 독립 설치 검사는 통과했지만 로컬 WinGet 검증은 미완료이므로, 인증 후 제출 도구의 Draft 경로를 사용한다.
+독립 설치 검사는 통과했지만 로컬 WinGet 검증은 미완료인 상태에서 제출 도구의 Draft 경로를 사용했다. 같은 패키지·버전의 PR을 중복 생성하지 않고 기존 PR의 검증 결과를 확인한다.
 
 ```powershell
 ./scripts/submit-winget.ps1 -Draft
 ```
+
+현재 [Microsoft 봇의 CLA 요청 댓글](https://github.com/microsoft/winget-pkgs/pull/450836#issuecomment-6115485956)에 원문과 동의 방법이 표시되어 있다. 계정 소유자가 약관과 제출물의 권리 관계를 검토하고 본인 상황에 맞는 동의 댓글을 직접 작성한다. 실제 동의가 확인되기 전에 PR의 CLA 체크 항목을 완료로 표시하지 않는다.
 
 등록 도구를 사용하지 않고 직접 제출하는 절차는 다음과 같다.
 
