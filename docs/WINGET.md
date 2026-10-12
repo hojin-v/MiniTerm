@@ -6,9 +6,9 @@
 
 2026-10-12에 [등록 PR #450836](https://github.com/microsoft/winget-pkgs/pull/450836)의 이름과 실제 제출 파일을 `Hnode.MiniTerm 0.1.0-alpha.3`으로 갱신하고 Draft를 해제했다. 네 파일의 Git blob SHA가 현재 매니페스트와 일치한다. 계정 소유자의 CLA 검사는 새 제출에서도 통과했다. 초기 alpha.1 제출은 Microsoft 설치·메타데이터 검증까지 통과했으며 정책 검사에서 관리자 수동 검토를 요청받았다. alpha.3은 새 ID·설치 파일로 다시 검증 중이므로 이전 버전의 성공을 새 버전의 성공으로 표시하지 않는다. Microsoft 검토·승인·병합·카탈로그 반영은 아직 완료되지 않았다.
 
-새 설치본은 [Windows CI](https://github.com/hojin-v/MiniTerm/actions/runs/38190754852)에서 독립 `/S` 설치·앱 로딩·제거·설정 보존을 통과했다. 같은 CI의 `winget install --manifest`는 SmartScreen 대기로 종료됐고 설치 레지스트리와 앱 파일이 생성되지 않았다. PR 본문에 이 범위를 명시하고 WinGet 설치 항목은 미완료로 유지했다. 관리자 검토가 필요하다는 메일만으로 동의 댓글을 다시 남기거나 새 PR을 만들 필요는 없다. 최신 판정과 저자에게 요청된 수정 사항은 PR의 검사·댓글에서 확인한다.
+새 설치본은 [Windows CI](https://github.com/hojin-v/MiniTerm/actions/runs/38191677140)의 독립 `/S` 설치·앱 로딩·제거·설정 보존 검사를 통과했다. URL 수정까지 반영한 네 매니페스트의 해시와 설치 파일 SHA256을 대조했다. 앞선 [WinGet CI](https://github.com/hojin-v/MiniTerm/actions/runs/38190754852)의 `winget install --manifest`는 SmartScreen 대기로 종료됐고 설치 레지스트리와 앱 파일이 생성되지 않았다. PR 본문에 이 범위를 명시하고 WinGet 설치 항목은 미완료로 유지했다. 관리자 검토가 필요하다는 메일만으로 동의 댓글을 다시 남기거나 새 PR을 만들 필요는 없다. 최신 판정과 저자에게 요청된 수정 사항은 PR의 검사·댓글에서 확인한다.
 
-Hnode alpha.3의 첫 재검증에서는 테스터 안내 문서 `blob/main/docs/TESTER_GUIDE.md` 요청이 HTTP 503을 반환해 URL 검사가 중단됐다. 설치 파일과 나머지 URL은 통과했으며, 기존 정책 검토 메일과는 별도 오류다. 문서 링크를 공개 릴리스 태그 `blob/v0.1.0-alpha.3/docs/TESTER_GUIDE.md`에 고정했다. 수정 링크의 HTTP 200과 공개 TESTER_GUIDE 자산의 SHA256 일치를 확인했다. 이후 PR에서 새 URL 검증의 성공 여부를 다시 확인한다. HTTP 200 확인만으로 Microsoft의 URL·정책 검증 성공을 주장하지 않는다.
+Hnode alpha.3의 첫 재검증에서는 테스터 안내 문서 `blob/main/docs/TESTER_GUIDE.md` 요청이 HTTP 503을 반환해 URL 검사가 중단됐다. 설치 파일과 나머지 URL은 통과했으며, 기존 정책 검토 메일과는 별도 오류다. 문서 링크를 공개 릴리스 태그 `blob/v0.1.0-alpha.3/docs/TESTER_GUIDE.md`에 고정했다. 수정 링크의 HTTP 200과 공개 TESTER_GUIDE 자산의 SHA256 일치를 확인하고 실제 PR에 반영했다. 새 검증이 시작되면서 이전 URL 오류와 저자 응답 요청 라벨은 해제됐지만, 새 URL·정책·설치 검증은 진행 중이다. HTTP 200 확인만으로 Microsoft의 URL·정책 검증 성공을 주장하지 않는다.
 
 ## 등록 후 설치·업데이트·제거
 
