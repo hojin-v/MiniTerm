@@ -5,7 +5,10 @@ if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hoste
 & (Join-Path $PSScriptRoot 'verify-winget.ps1') -ManifestDirectory $ManifestDirectory -VerifyInstaller
 $taskSettings = @(
     @{path='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer';name='SmartScreenEnabled';value='Off';kind='String'},
-    @{path='HKLM:\SOFTWARE\Policies\Microsoft\Windows\System';name='EnableSmartScreen';value=0;kind='DWord'}
+    @{path='HKLM:\SOFTWARE\Policies\Microsoft\Windows\System';name='EnableSmartScreen';value=0;kind='DWord'},
+    # Shell Attachment Manager has a separate unsigned-download prompt even
+    # when SmartScreen is off. This disposable runner executes verified EXEs.
+    @{path='HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Associations';name='LowRiskFileTypes';value='.exe';kind='String'}
 )
 $taskSaved = @()
 try {
@@ -16,7 +19,7 @@ try {
         if (-not $taskKey) { New-Item -Path $taskSetting.path -Force | Out-Null }
         New-ItemProperty -LiteralPath $taskSetting.path -Name $taskSetting.name -Value $taskSetting.value -PropertyType $taskSetting.kind -Force | Out-Null
     }
-    Write-Output '::notice title=Headless installer scope::SmartScreen reputation prompting is disabled only for this disposable runner test; file hashes and Defender remain enforced. This is not a reputation test.'
+    Write-Output '::notice title=Headless installer scope::SmartScreen and Attachment Manager EXE prompts are disabled only for this disposable runner test; file hashes and Defender remain enforced. This is not a reputation test.'
     & (Join-Path $PSScriptRoot 'verify-winget-install.ps1') -ManifestDirectory $ManifestDirectory
 } finally {
     foreach ($taskSetting in $taskSaved) {
@@ -26,5 +29,5 @@ try {
             Remove-ItemProperty -LiteralPath $taskSetting.path -Name $taskSetting.name -ErrorAction SilentlyContinue
         }
     }
-    Write-Output '::notice title=Headless installer cleanup::Original SmartScreen registry values restored.'
+    Write-Output '::notice title=Headless installer cleanup::Original SmartScreen and Attachment Manager registry values restored.'
 }
