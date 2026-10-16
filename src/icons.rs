@@ -22,6 +22,7 @@ pub enum Icon {
     Terminal,
     Prompt,
     Layout,
+    Summary,
     Sun,
     Moon,
 }
@@ -109,7 +110,7 @@ impl Widget for IconButton<'_> {
             paint(
                 ui.painter(),
                 self.icon,
-                rect.center(),
+                Pos2::new(rect.left() + self.size * 0.5, rect.center().y),
                 icon_size,
                 color,
                 self.selected,
@@ -316,6 +317,13 @@ fn paint(
             );
             line(&[[2.0, 8.0], [22.0, 8.0]]);
             line(&[[9.0, 8.0], [9.0, 21.0]]);
+        }
+        Icon::Summary => {
+            line(&[[3.0, 6.0], [5.0, 8.0], [8.0, 4.0]]);
+            line(&[[11.0, 6.0], [21.0, 6.0]]);
+            line(&[[3.0, 13.0], [5.0, 15.0], [8.0, 11.0]]);
+            line(&[[11.0, 13.0], [21.0, 13.0]]);
+            line(&[[3.0, 20.0], [21.0, 20.0]]);
         }
         Icon::Sun => {
             painter.circle_stroke(center, size * 0.20, stroke);

@@ -28,7 +28,8 @@ jobs:
         with:
           workspaces: ". -> .tools/target"
       - name: Format
-        run: cargo fmt --all -- --check
+        # Keep vendored upstream formatting; check all of MiniTerm's own targets.
+        run: cargo fmt --package miniterm -- --check
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Logic tests
@@ -41,6 +42,11 @@ jobs:
           $env:MINITERM_DATA_DIR = Join-Path $env:GITHUB_WORKSPACE ('artifacts/ipc-' + $env:MINITERM_INSTANCE_ID)
           New-Item -ItemType Directory -Path $env:MINITERM_DATA_DIR -Force | Out-Null
           cargo test --locked --lib ipc::tests::real_pipe -- --ignored --nocapture --test-threads=1
+      - name: Native console resource limits and shutdown
+        shell: pwsh
+        run: |
+          $env:MINITERM_DATA_DIR = Join-Path $env:GITHUB_WORKSPACE ('artifacts/console-' + [guid]::NewGuid().ToString())
+          cargo test --locked --lib terminal::tests::native_console_limits_shutdown_and_final_output_are_preserved -- --ignored --exact --nocapture --test-threads=1
       - name: Default Git compatibility (only documented alpha failures allowed)
         run: ./scripts/verify-git-compatibility.ps1 -AllowKnownFailures
       - name: Build

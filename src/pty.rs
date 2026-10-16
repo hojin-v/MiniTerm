@@ -1,8 +1,11 @@
+pub use crate::console_guard::ConsoleHost;
 use crate::{native::ProcessJob, shell::ShellProfile};
 use portable_pty::{native_pty_system, Child, MasterPty, PtySize};
 use std::io::{Read, Write};
 
 pub struct OpenPty {
+    // Drop this first so ClosePseudoConsole never waits for an unowned host.
+    pub console: ConsoleHost,
     pub master: Box<dyn MasterPty + Send>,
     pub reader: Box<dyn Read + Send>,
     pub writer: Box<dyn Write + Send>,
@@ -33,10 +36,17 @@ pub fn open_with_prompt(
     rows: u16,
     prompt_directory: Option<&std::path::Path>,
 ) -> Result<OpenPty, String> {
+    static CREATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    crate::console_host::configure_dll_search()?;
     let command = profile.command_with_prompt(id, prompt_directory)?;
+    // Serialize host creation and identification; regular input/output is concurrent.
+    let creation_lock = CREATION.lock().unwrap_or_else(|p| p.into_inner());
+    let creation = crate::console_guard::Creation::begin()?;
     let pair = native_pty_system()
         .openpty(size(cols, rows)?)
         .map_err(|e| e.to_string())?;
+    let console = creation.guard()?;
+    drop(creation_lock);
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let mut child = pair
@@ -56,6 +66,7 @@ pub fn open_with_prompt(
     };
     drop(pair.slave);
     Ok(OpenPty {
+        console,
         master: pair.master,
         reader,
         writer,

@@ -18,7 +18,7 @@ pub fn data_directory() -> Result<PathBuf, String> {
         .ok_or("LOCALAPPDATA가 없습니다.".into())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub schema_version: u32,
@@ -27,6 +27,7 @@ pub struct Settings {
     pub font_family: String,
     pub font_size: u16,
     pub scrollback: u32,
+    pub alternate_scroll: bool,
     pub notifications: bool,
     pub notification_sound: bool,
     pub shortcut: String,
@@ -44,6 +45,7 @@ impl Default for Settings {
             font_family: String::new(),
             font_size: 14,
             scrollback: 10_000,
+            alternate_scroll: false,
             notifications: true,
             notification_sound: false,
             shortcut: "Ctrl+Alt+Space".into(),
@@ -55,6 +57,34 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Apply only the fields edited this frame. An unfinished text field must not
+    /// prevent an unrelated control from updating the last accepted preferences.
+    pub(crate) fn with_edits(&self, before: &Self, edited: &Self) -> Self {
+        let mut next = self.clone();
+        macro_rules! copy_edits {
+            ($($field:ident),+ $(,)?) => {
+                $(if before.$field != edited.$field {
+                    next.$field = edited.$field.clone();
+                })+
+            };
+        }
+        copy_edits!(
+            profile,
+            theme,
+            font_family,
+            font_size,
+            scrollback,
+            alternate_scroll,
+            notifications,
+            notification_sound,
+            shortcut,
+            autostart,
+            window,
+            prompt
+        );
+        next
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         crate::native::parse_shortcut(&self.shortcut)?;
         self.window.validate()?;
@@ -102,6 +132,47 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn invalid_text_does_not_block_an_unrelated_live_preference() {
+        let accepted = Settings::default();
+        let mut draft = accepted.clone();
+        draft.shortcut = "Ctrl+Alt+".into();
+        assert!(accepted.with_edits(&accepted, &draft).validate().is_err());
+        let before = draft.clone();
+        draft.notifications = false;
+        let next = accepted.with_edits(&before, &draft);
+        assert!(!next.notifications);
+        assert_eq!(next.shortcut, accepted.shortcut);
+        let path = std::env::temp_dir().join(format!(
+            "miniterm-live-settings-{}.json",
+            uuid::Uuid::new_v4()
+        ));
+        next.save(&path).unwrap();
+        assert_eq!(Settings::load(&path).unwrap(), next);
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn a_rejected_live_edit_keeps_the_last_saved_preferences() {
+        let path = std::env::temp_dir().join(format!(
+            "miniterm-live-settings-{}.json",
+            uuid::Uuid::new_v4()
+        ));
+        let accepted = Settings {
+            theme: "light".into(),
+            window: crate::geometry::WindowPreferences {
+                transparency: 25,
+                ..Default::default()
+            },
+            ..Settings::default()
+        };
+        accepted.save(&path).unwrap();
+        let mut invalid = accepted.clone();
+        invalid.shortcut = "Ctrl+Alt+".into();
+        assert!(invalid.save(&path).is_err());
+        assert_eq!(Settings::load(&path).unwrap(), accepted);
+        assert!(!path.with_extension("json.tmp").exists());
+        std::fs::remove_file(path).unwrap();
+    }
     #[test]
     fn earlier_corner_settings_migrate_without_resetting_other_preferences() {
         let path =

@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Fixture)
+﻿param([Parameter(Mandatory=$true)][string]$Fixture)
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path -Parent $PSScriptRoot
 $taskExecutable=Join-Path $taskRoot 'artifacts/miniterm.exe'
@@ -141,7 +141,7 @@ try {
  }
  Save-GoalImage 'goal-docked-dark.png'
  $taskBatteryLog=Get-Content -LiteralPath (Join-Path $taskFixture 'battery-debug.jsonl') -Encoding UTF8 -Raw
- if($taskBatteryLog -notmatch '"layout":"composite"' -or $taskBatteryLog -notmatch '"event":"fullscreen:start"' -or $taskBatteryLog -notmatch '"--no-alt-screen"'){throw 'AI Battery compositor and inline Codex execution were not observed.'}
+ if($taskBatteryLog -notmatch '"layout":"inline"' -or $taskBatteryLog -notmatch '"event":"overlay:start"' -or $taskBatteryLog -notmatch '"--no-alt-screen"'){throw 'AI Battery direct inline overlay and inline Codex execution were not observed.'}
  Invoke-Goal 'diagnostic theme-light' | Out-Null
  Start-Sleep -Milliseconds 200
  Save-GoalImage 'goal-docked-light.png'
@@ -156,9 +156,13 @@ try {
  if(-not $taskApp.WaitForExit(5000)){throw 'Fixture GUI did not close.'}
  foreach($taskShell in $taskShells){if(Get-Process -Id $taskShell -ErrorAction SilentlyContinue){throw 'Owned Bash survived the fixture GUI exit.'}}
  foreach($taskUserApp in $taskUserApps){$taskExisting=Get-Process -Id $taskUserApp.id -ErrorAction Stop;if($taskExisting.StartTime -ne $taskUserApp.started){throw 'User app identity changed.'}}
- $taskResult=@{fixture=$taskFixture;executableSha256=(Get-FileHash -LiteralPath $taskExecutable -Algorithm SHA256).Hash;actualNativeCodex=$true;actualBashBridge=$true;actualBatteryCompositor=$true;inlineArgumentObserved=$true;goalChoiceBounds=$taskChooser;terminalBounds=$taskBody;goalDocked=$true;dismissed=$true;darkLightCaptures=$true;userSessionPreserved=$true;ownedBashProcessIds=$taskShells;ownedBashShutdownConfirmed=$true;scope='Real GUI + installed native CLI and AI Battery. Own paused-goal history and localhost HTTP-error provider; fixed battery reading. Excludes account/model responses, Korean IME and ongoing real tool output.'}
+ $taskResult=@{fixture=$taskFixture;executableSha256=(Get-FileHash -LiteralPath $taskExecutable -Algorithm SHA256).Hash;actualNativeCodex=$true;actualBashBridge=$true;actualBatteryInlineOverlay=$true;inlineArgumentObserved=$true;goalChoiceBounds=$taskChooser;terminalBounds=$taskBody;goalDocked=$true;dismissed=$true;darkLightCaptures=$true;userSessionPreserved=$true;ownedBashProcessIds=$taskShells;ownedBashShutdownConfirmed=$true;scope='Real GUI + installed native CLI and AI Battery inline overlay. Own paused-goal history and localhost HTTP-error provider; fixed battery reading. Excludes account/model responses, Korean IME and ongoing real tool output.'}
  [IO.File]::WriteAllText((Join-Path $taskFixture 'verification.json'),($taskResult | ConvertTo-Json),[Text.UTF8Encoding]::new($false))
  $taskResult | ConvertTo-Json
+} catch {
+ try { Save-GoalImage 'failure.png' } catch {}
+ try { [IO.File]::WriteAllText((Join-Path $taskFixture 'failure-snapshot.json'),(Invoke-Goal 'sessions'),[Text.UTF8Encoding]::new($false)) } catch {}
+ throw
 } finally {
  if($taskApp -and -not $taskApp.HasExited){try{Invoke-Goal 'diagnostic quit' | Out-Null}catch{};if(-not $taskApp.WaitForExit(3000)){$taskApp.Kill()}}
  [MiniTermGoalProbe]::SetForegroundWindow($taskOriginalFocus) | Out-Null

@@ -124,6 +124,26 @@ pub fn session_codex_notify(
         .map_err(|e| e.to_string())
 }
 
+/// Shared TUI observation is enabled only by an existing, exactly owned opt-in.
+/// An explicit replacement callback (including notify=[]) disables it.
+pub fn codex_link_enabled(home: &Path) -> bool {
+    let backup = home.join("miniterm-notify.json");
+    let Ok(record) = read(&backup)
+        .and_then(|text| serde_json::from_str::<CodexBackup>(&text).map_err(|e| e.to_string()))
+    else {
+        return false;
+    };
+    let Ok(config) = read(&home.join("config.toml"))
+        .and_then(|text| text.parse::<DocumentMut>().map_err(|e| e.to_string()))
+    else {
+        return false;
+    };
+    record.installed.len() == 5
+        && record.installed[1..4] == ["notify", "codex", "--chain-file"]
+        && Path::new(&record.installed[4]) == backup
+        && array(&config).ok().flatten().as_ref() == Some(&record.installed)
+}
+
 /// Respect explicit CLI notify overrides. Profiles are resolved separately so
 /// a model-only profile can still inherit its existing MiniTerm connection.
 pub fn codex_has_notification_override(args: &[String]) -> bool {
@@ -552,14 +572,17 @@ mod tests {
         .unwrap();
         enable_codex(&home, helper).unwrap();
         enable_codex(&home, helper).unwrap();
+        assert!(codex_link_enabled(&home));
         assert!(read(&config).unwrap().contains("# keep comment"));
         disable_codex(&home, helper).unwrap();
+        assert!(!codex_link_enabled(&home));
         let restored = read(&config).unwrap().parse::<DocumentMut>().unwrap();
         assert_eq!(array(&restored).unwrap().unwrap(), ["existing", "arg"]);
         enable_codex(&home, helper).unwrap();
         let mut changed = read(&config).unwrap().parse::<DocumentMut>().unwrap();
         set_notify(&mut changed, &["new-user-command".into()]);
         fs::write(&config, changed.to_string()).unwrap();
+        assert!(!codex_link_enabled(&home));
         assert!(disable_codex(&home, helper).is_err());
         assert_eq!(
             array(&read(&config).unwrap().parse().unwrap())

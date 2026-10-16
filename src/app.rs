@@ -43,6 +43,22 @@ enum Action {
     Diagnostic(String),
     Activate(String),
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HudShortcut {
+    NewTab,
+    CloseTab,
+    NextTab,
+    PreviousTab,
+    SelectTab(usize),
+    Settings,
+    ToggleExpanded,
+    ToggleMiniView,
+    FontSize(i16),
+    ScrollLines(i32),
+    ScrollPage(bool),
+    ScrollEnd(bool),
+}
 #[derive(Default)]
 struct RowCache {
     hash: u64,
@@ -55,6 +71,12 @@ struct WindowTransition {
     started: Instant,
 }
 type DiagnosticUi = Arc<Mutex<BTreeMap<String, [f32; 4]>>>;
+
+const SETTINGS_SIZE: Vec2 = Vec2::new(560.0, 720.0);
+
+fn settings_viewport_id() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("settings")
+}
 
 #[derive(Default)]
 struct FrameGate(Option<u64>);
@@ -73,6 +95,10 @@ pub struct MiniTerm {
     hwnd: isize,
     settings: Settings,
     saved_settings: Settings,
+    edited_settings: Settings,
+    settings_observed: Settings,
+    settings_error: Option<String>,
+    integration_feedback: Option<(bool, String)>,
     settings_path: PathBuf,
     sessions: Vec<Session>,
     selected: usize,
@@ -89,6 +115,8 @@ pub struct MiniTerm {
     was_focused: bool,
     terminal_focus: bool,
     settings_open: bool,
+    settings_native_ready: bool,
+    settings_position: Option<Pos2>,
     quit_confirm: bool,
     close_confirm: Option<usize>,
     quit: bool,
@@ -115,6 +143,13 @@ pub struct MiniTerm {
     header_gate: FrameGate,
     input_gate: FrameGate,
     scroll_gate: FrameGate,
+    shortcut_gate: FrameGate,
+    opacity_hover: Option<Instant>,
+    opacity_keepalive: Option<Instant>,
+    opacity_open: bool,
+    opacity_anchor: Pos2,
+    transparency_save_at: Option<Instant>,
+    brand: egui::TextureHandle,
     settings_gate: FrameGate,
     broker: Arc<Mutex<Broker>>,
     _ipc_server: ipc::Server,
@@ -122,7 +157,9 @@ pub struct MiniTerm {
     notification_preferences: Arc<Mutex<(bool, bool)>>,
     notices_open: bool,
     diagnostic_ui: Option<DiagnosticUi>,
+    diagnostic_scroll: Option<Arc<Mutex<ipc::TerminalScroll>>>,
     diagnostic_sample_requested: bool,
+    diagnostic_settings_keys: Vec<Event>,
     diagnostic_sample_ready: Arc<AtomicBool>,
 }
 
@@ -150,6 +187,8 @@ impl MiniTerm {
             Err(error) => (Settings::default(), Some(error)),
         };
         install_fonts(ctx, &settings.font_family);
+        // Terminal font shortcuts must not also scale the entire egui interface.
+        ctx.options_mut(|options| options.zoom_with_keyboard = false);
         let (actions_tx, actions) = channel();
         let broker = Arc::new(Mutex::new(Broker::default()));
         let notification_preferences = Arc::new(Mutex::new((
@@ -172,144 +211,208 @@ impl MiniTerm {
         let diagnostic_ui = diagnostics.then(|| Arc::new(Mutex::new(BTreeMap::new())));
         let ipc_ui = diagnostic_ui.clone();
         let isolated = diagnostics && std::env::var_os("MINITERM_INSTANCE_ID").is_some();
+        let diagnostic_scroll =
+            isolated.then(|| Arc::new(Mutex::new(ipc::TerminalScroll::default())));
+        let ipc_scroll = diagnostic_scroll.clone();
         let diagnostic_sample_ready = Arc::new(AtomicBool::new(false));
         let ipc_sample_ready = diagnostic_sample_ready.clone();
-        let ipc_server = ipc::serve(move |request| match request {
-            ipc::Request::Diagnostic { command } => {
-                if !diagnostics {
-                    return ipc::Reply::error("진단 모드가 활성화되지 않았습니다.");
+        let ipc_server = ipc::serve(move |request| {
+            if let ipc::Request::CodexEvent { connection, event } = &request {
+                if !crate::codex_link::active(&event.session_id, connection) {
+                    return ipc::Reply::error("이 Codex 알림 연결은 종료되었습니다.");
                 }
-                if ![
-                    "hide",
-                    "expand",
-                    "collapse",
-                    "settings",
-                    "new-session",
-                    "quit",
-                    "theme-light",
-                    "theme-dark",
-                    "settings-cancel",
-                    "sample",
-                    "sample-ui",
-                    "sample-summary",
-                    "sample-summary-command",
-                ]
-                .contains(&command.as_str())
-                {
-                    return ipc::Reply::error("지원하지 않는 진단 명령입니다.");
-                }
-                if matches!(
-                    command.as_str(),
-                    "sample" | "sample-ui" | "sample-summary" | "sample-summary-command"
-                ) && std::env::var_os("MINITERM_INSTANCE_ID").is_none()
-                {
-                    return ipc::Reply::error(
-                        "출력 샘플은 별도 진단 세션에서만 사용할 수 있습니다.",
-                    );
-                }
-                // Hidden viewports need a native visibility event to dispatch a UI action.
-                if command != "hide" {
-                    native::show(hwnd, false);
-                }
-                let _ = ipc_tx.send(Action::Diagnostic(command));
-                ipc_ctx.request_repaint();
-                ipc::Reply::ok()
             }
-            ipc::Request::Event { event } => {
-                if let Err(error) = event.validate() {
-                    return ipc::Reply::error(error);
-                }
-                let notice = {
-                    let mut broker = ipc_broker.lock().unwrap_or_else(|p| p.into_inner());
-                    if !broker.sessions.contains_key(&event.session_id) {
-                        return ipc::Reply::error("이 세션은 이미 종료되었습니다.");
+            match request {
+                ipc::Request::PrepareCodex {
+                    session_id,
+                    home,
+                    cwd,
+                    environment,
+                } => {
+                    let active = ipc_broker
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .sessions
+                        .get(&session_id)
+                        .is_some_and(|s| {
+                            !s.exited.as_ref().is_some_and(|e| e.load(Ordering::Acquire))
+                        });
+                    if !active {
+                        return ipc::Reply::error("Codex를 실행한 탭을 확인하세요.");
                     }
-                    let observed = native::visible(hwnd)
-                        && native::focused(hwnd)
-                        && broker.selected.as_deref() == Some(&event.session_id);
-                    broker.receive(event, observed)
-                };
-                let (enabled, sound) = *ipc_preferences.lock().unwrap_or_else(|p| p.into_inner());
-                if enabled {
-                    if let Some(notice) = notice {
-                        ipc_toast.send(notice, sound);
-                    }
+                    crate::codex_bash::begin_preparation(&session_id, &home, &cwd, environment)
                 }
-                ipc_ctx.request_repaint();
-                ipc::Reply::ok()
-            }
-            ipc::Request::Progress { session_id, update } => {
-                let result = ipc_broker
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .progress(&session_id, update);
-                match result {
-                    Ok(progress) => {
-                        ipc_ctx.request_repaint();
-                        ipc::Reply {
-                            progress,
-                            ..ipc::Reply::ok()
+                ipc::Request::CodexPrepared { session_id, ticket } => {
+                    crate::codex_bash::poll_preparation(&session_id, &ticket)
+                }
+                ipc::Request::CloseCodexLink {
+                    session_id,
+                    connection,
+                } => {
+                    crate::codex_link::close(&session_id, &connection);
+                    ipc::Reply::ok()
+                }
+                ipc::Request::Diagnostic { command } => {
+                    if !diagnostics {
+                        return ipc::Reply::error("진단 모드가 활성화되지 않았습니다.");
+                    }
+                    let fixture_key = diagnostic_key(&command);
+                    if ![
+                        "hide",
+                        "expand",
+                        "collapse",
+                        "settings",
+                        "new-session",
+                        "quit",
+                        "theme-light",
+                        "theme-dark",
+                        "settings-close",
+                        "settings-cancel",
+                        "confirm-quit",
+                        "sample",
+                        "sample-ui",
+                        "sample-summary",
+                        "sample-summary-command",
+                        "sample-scroll",
+                    ]
+                    .contains(&command.as_str())
+                        && fixture_key.is_none()
+                    {
+                        return ipc::Reply::error("지원하지 않는 진단 명령입니다.");
+                    }
+                    if fixture_key.is_some() && !isolated {
+                        return ipc::Reply::error(
+                            "키 입력 시험은 별도 진단 세션에서만 사용할 수 있습니다.",
+                        );
+                    }
+                    if matches!(
+                        command.as_str(),
+                        "sample"
+                            | "sample-ui"
+                            | "sample-summary"
+                            | "sample-summary-command"
+                            | "sample-scroll"
+                            | "confirm-quit"
+                    ) && std::env::var_os("MINITERM_INSTANCE_ID").is_none()
+                    {
+                        return ipc::Reply::error(
+                            "출력 샘플은 별도 진단 세션에서만 사용할 수 있습니다.",
+                        );
+                    }
+                    // Hidden viewports need a native visibility event to dispatch a UI action.
+                    if !matches!(
+                        command.as_str(),
+                        "hide" | "settings" | "settings-close" | "settings-cancel"
+                    ) {
+                        native::show(hwnd, false);
+                    }
+                    let _ = ipc_tx.send(Action::Diagnostic(command));
+                    ipc_ctx.request_repaint();
+                    native::wake_hidden(hwnd);
+                    ipc::Reply::ok()
+                }
+                ipc::Request::Event { event } | ipc::Request::CodexEvent { event, .. } => {
+                    if let Err(error) = event.validate() {
+                        return ipc::Reply::error(error);
+                    }
+                    let notice = {
+                        let mut broker = ipc_broker.lock().unwrap_or_else(|p| p.into_inner());
+                        if !broker.sessions.contains_key(&event.session_id) {
+                            return ipc::Reply::error("이 세션은 이미 종료되었습니다.");
+                        }
+                        let observed = native::visible(hwnd)
+                            && native::focused(hwnd)
+                            && broker.selected.as_deref() == Some(&event.session_id);
+                        broker.receive(event, observed)
+                    };
+                    let (enabled, sound) =
+                        *ipc_preferences.lock().unwrap_or_else(|p| p.into_inner());
+                    if enabled {
+                        if let Some(notice) = notice {
+                            ipc_toast.send(notice, sound);
                         }
                     }
-                    Err(error) => ipc::Reply::error(error),
+                    ipc_ctx.request_repaint();
+                    ipc::Reply::ok()
                 }
-            }
-            ipc::Request::Activate { session_id } => {
-                if uuid::Uuid::parse_str(&session_id).is_err() {
-                    return ipc::Reply::error("알림 세션 ID를 확인하세요.");
+                ipc::Request::Progress { session_id, update } => {
+                    let result = ipc_broker
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .progress(&session_id, update);
+                    match result {
+                        Ok(progress) => {
+                            ipc_ctx.request_repaint();
+                            ipc::Reply {
+                                progress,
+                                ..ipc::Reply::ok()
+                            }
+                        }
+                        Err(error) => ipc::Reply::error(error),
+                    }
                 }
-                native::show(hwnd, true);
-                let _ = ipc_tx.send(Action::Activate(session_id));
-                ipc_ctx.request_repaint();
-                ipc::Reply::ok()
-            }
-            ipc::Request::Show => {
-                native::show(hwnd, true);
-                let _ = ipc_tx.send(Action::Show);
-                ipc_ctx.request_repaint();
-                ipc::Reply::ok()
-            }
-            ipc::Request::Sessions => {
-                let broker = ipc_broker.lock().unwrap_or_else(|p| p.into_inner());
-                ipc::Reply {
-                    ok: true,
-                    sessions: broker
-                        .sessions
-                        .iter()
-                        .filter(|(_, s)| {
-                            !s.exited.as_ref().is_some_and(|e| e.load(Ordering::Acquire))
-                        })
-                        .map(|(id, _)| id.clone())
-                        .collect(),
-                    error: None,
-                    progress: None,
-                    capabilities: vec!["progress-v1".into()],
-                    helper_capabilities: Vec::new(),
-                    details: Some(ipc::Snapshot {
-                        fixture_sample_ready: isolated
-                            .then(|| ipc_sample_ready.load(Ordering::Acquire)),
-                        states: broker
+                ipc::Request::Activate { session_id } => {
+                    if uuid::Uuid::parse_str(&session_id).is_err() {
+                        return ipc::Reply::error("알림 세션 ID를 확인하세요.");
+                    }
+                    native::show(hwnd, true);
+                    let _ = ipc_tx.send(Action::Activate(session_id));
+                    ipc_ctx.request_repaint();
+                    ipc::Reply::ok()
+                }
+                ipc::Request::Show => {
+                    native::show(hwnd, true);
+                    let _ = ipc_tx.send(Action::Show);
+                    ipc_ctx.request_repaint();
+                    ipc::Reply::ok()
+                }
+                ipc::Request::Sessions => {
+                    let broker = ipc_broker.lock().unwrap_or_else(|p| p.into_inner());
+                    ipc::Reply {
+                        ok: true,
+                        sessions: broker
                             .sessions
                             .iter()
-                            .map(|(id, s)| (id.clone(), s.state))
-                            .collect(),
-                        unread: broker
-                            .sessions
-                            .iter()
-                            .filter(|(_, s)| s.unread)
+                            .filter(|(_, s)| {
+                                !s.exited.as_ref().is_some_and(|e| e.load(Ordering::Acquire))
+                            })
                             .map(|(id, _)| id.clone())
                             .collect(),
-                        notice_count: broker.notices.len(),
-                        toast_count: ipc_toast.published.load(Ordering::Relaxed),
-                        toast_error: ipc_toast
-                            .warning
-                            .lock()
-                            .unwrap_or_else(|p| p.into_inner())
-                            .clone(),
-                        ui: ipc_ui
-                            .as_ref()
-                            .map(|map| map.lock().unwrap_or_else(|p| p.into_inner()).clone()),
-                    }),
+                        error: None,
+                        progress: None,
+                        capabilities: vec!["progress-v1".into()],
+                        helper_capabilities: Vec::new(),
+                        preparation_id: None,
+                        codex_connection: None,
+                        details: Some(ipc::Snapshot {
+                            fixture_sample_ready: isolated
+                                .then(|| ipc_sample_ready.load(Ordering::Acquire)),
+                            states: broker
+                                .sessions
+                                .iter()
+                                .map(|(id, s)| (id.clone(), s.state))
+                                .collect(),
+                            unread: broker
+                                .sessions
+                                .iter()
+                                .filter(|(_, s)| s.unread)
+                                .map(|(id, _)| id.clone())
+                                .collect(),
+                            notice_count: broker.notices.len(),
+                            toast_count: ipc_toast.published.load(Ordering::Relaxed),
+                            toast_error: ipc_toast
+                                .warning
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .clone(),
+                            ui: ipc_ui
+                                .as_ref()
+                                .map(|map| map.lock().unwrap_or_else(|p| p.into_inner()).clone()),
+                            terminal_scroll: ipc_scroll.as_ref().map(|state| {
+                                state.lock().unwrap_or_else(|p| p.into_inner()).clone()
+                            }),
+                        }),
+                    }
                 }
             }
         })?;
@@ -349,11 +452,12 @@ impl MiniTerm {
             } else {
                 Action::Quit
             };
-            if !matches!(action, Action::Hide) {
+            if !matches!(action, Action::Hide | Action::Settings) {
                 native::show(hwnd, true);
             }
             let _ = menu_tx.send(action);
             menu_ctx.request_repaint();
+            native::wake_hidden(hwnd);
         }));
         let tray_tx = actions_tx.clone();
         let tray_ctx = ctx.clone();
@@ -383,6 +487,10 @@ impl MiniTerm {
         let mut app = Self {
             hwnd,
             saved_settings: settings.clone(),
+            edited_settings: settings.clone(),
+            settings_observed: settings.clone(),
+            settings_error: None,
+            integration_feedback: None,
             settings,
             settings_path: path,
             sessions: Vec::new(),
@@ -400,6 +508,8 @@ impl MiniTerm {
             was_focused: false,
             terminal_focus: true,
             settings_open: false,
+            settings_native_ready: false,
+            settings_position: None,
             quit_confirm: false,
             close_confirm: None,
             quit: false,
@@ -432,6 +542,17 @@ impl MiniTerm {
             header_gate: FrameGate::default(),
             input_gate: FrameGate::default(),
             scroll_gate: FrameGate::default(),
+            shortcut_gate: FrameGate::default(),
+            opacity_hover: None,
+            opacity_keepalive: None,
+            opacity_open: false,
+            opacity_anchor: Pos2::ZERO,
+            transparency_save_at: None,
+            brand: ctx.load_texture(
+                "miniterm-brand",
+                egui::ColorImage::from_rgba_unmultiplied([64, 64], &crate::brand::rgba(64)),
+                egui::TextureOptions::LINEAR,
+            ),
             settings_gate: FrameGate::default(),
             broker,
             _ipc_server: ipc_server,
@@ -439,7 +560,9 @@ impl MiniTerm {
             notification_preferences,
             notices_open: false,
             diagnostic_ui,
+            diagnostic_scroll,
             diagnostic_sample_requested: false,
+            diagnostic_settings_keys: Vec::new(),
             diagnostic_sample_ready,
             adapter_name: cc
                 .wgpu_render_state
@@ -500,6 +623,194 @@ impl MiniTerm {
         });
     }
 
+    fn remove_session(&mut self, index: usize) {
+        let id = self.sessions[index].id.clone();
+        crate::codex_link::close_session(&id);
+        self.broker
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&id);
+        self.sessions.remove(index);
+        self.selected = selection_after_removal(self.selected, index, self.sessions.len());
+        self.close_confirm = self.close_confirm.and_then(|closing| {
+            if closing == index {
+                None
+            } else {
+                Some(closing - usize::from(closing > index))
+            }
+        });
+        if self.pending_activation.as_ref() == Some(&id) {
+            self.pending_activation = None;
+        }
+        self.rows.clear();
+        self.composition.clear();
+        self.composing = false;
+        if self.sessions.is_empty() && self.starting == 0 && self.error.is_none() {
+            self.hide();
+        }
+    }
+
+    fn select_tab(&mut self, index: usize) {
+        if index >= self.sessions.len() {
+            return;
+        }
+        self.selected = index;
+        self.terminal_focus = true;
+        self.composition.clear();
+        self.composing = false;
+        self.rows.clear();
+    }
+
+    fn toggle_mini_view(&mut self) {
+        self.settings.window.mini_view = match self.settings.window.mini_view {
+            crate::geometry::MiniView::Input => crate::geometry::MiniView::Summary,
+            crate::geometry::MiniView::Summary => crate::geometry::MiniView::Input,
+        };
+        self.saved_settings.window.mini_view = self.settings.window.mini_view;
+        if let Err(error) = self.saved_settings.save(&self.settings_path) {
+            self.error = Some(error);
+        }
+        self.rows.clear();
+        self.terminal_focus = true;
+    }
+
+    fn hud_shortcut(&mut self, ctx: &Context, shortcut: HudShortcut) {
+        match shortcut {
+            HudShortcut::NewTab => {
+                self.start_session(ctx);
+                self.terminal_focus = true;
+            }
+            HudShortcut::CloseTab if !self.sessions.is_empty() => {
+                self.close_confirm = Some(self.selected);
+                self.expand(true);
+            }
+            HudShortcut::NextTab | HudShortcut::PreviousTab if !self.sessions.is_empty() => {
+                let count = self.sessions.len();
+                let index = match shortcut {
+                    HudShortcut::NextTab => (self.selected + 1) % count,
+                    _ => (self.selected + count - 1) % count,
+                };
+                self.select_tab(index);
+            }
+            HudShortcut::SelectTab(index) => self.select_tab(index),
+            HudShortcut::Settings => self.open_settings(),
+            HudShortcut::ToggleExpanded => {
+                self.expand(!self.expanded);
+                self.terminal_focus = true;
+            }
+            HudShortcut::ToggleMiniView => self.toggle_mini_view(),
+            HudShortcut::FontSize(delta) => {
+                let mut next = self.saved_settings.clone();
+                next.font_size = if delta == 0 {
+                    Settings::default().font_size
+                } else {
+                    (next.font_size as i16 + delta).clamp(10, 24) as u16
+                };
+                if next != self.saved_settings {
+                    if let Err(error) = self.save_preferences(ctx, next) {
+                        self.error = Some(error);
+                    }
+                }
+            }
+            HudShortcut::ScrollLines(_)
+            | HudShortcut::ScrollPage(_)
+            | HudShortcut::ScrollEnd(_) => {
+                self.expand(true);
+                if let Some(session) = self.sessions.get(self.selected) {
+                    let mut term = session.term.lock();
+                    let scroll = match shortcut {
+                        HudShortcut::ScrollLines(lines) => Scroll::Delta(lines),
+                        HudShortcut::ScrollPage(true) => Scroll::PageUp,
+                        HudShortcut::ScrollPage(false) => Scroll::PageDown,
+                        HudShortcut::ScrollEnd(true) => Scroll::Top,
+                        _ => Scroll::Bottom,
+                    };
+                    term.scroll_display(scroll);
+                    self.rows.clear();
+                }
+            }
+            _ => {}
+        }
+        ctx.request_repaint();
+    }
+
+    fn quick_transparency(&mut self, value: u16, ctx: &Context) {
+        let value = value.min(80);
+        if self.settings.window.transparency != value {
+            self.settings.window.transparency = value;
+            self.transparency_save_at =
+                Some(Instant::now() + std::time::Duration::from_millis(250));
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
+    }
+
+    fn save_quick_transparency(&mut self) {
+        if self.transparency_save_at.take().is_none() {
+            return;
+        }
+        let mut saved = self.saved_settings.clone();
+        saved.window.transparency = self.settings.window.transparency;
+        match saved.save(&self.settings_path) {
+            Ok(()) => self.saved_settings = saved,
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    fn opacity_popup(&mut self, ctx: &Context) {
+        if !self.opacity_open {
+            return;
+        }
+        let mut value = self.settings.window.transparency;
+        let mut active = false;
+        let mut close = false;
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("transparency-popup"),
+            egui::ViewportBuilder::default()
+                .with_title("투명도")
+                .with_inner_size([72.0, 160.0])
+                .with_position(self.opacity_anchor)
+                .with_decorations(false)
+                .with_resizable(false)
+                .with_taskbar(false)
+                .with_always_on_top()
+                .with_active(false),
+            |ctx, _| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.label("투명도");
+                        ui.spacing_mut().slider_width = 103.0;
+                        let slider = ui.add(
+                            egui::Slider::new(&mut value, 0..=80)
+                                .vertical()
+                                .show_value(false),
+                        );
+                        self.record_widget("opacity-slider", slider.rect);
+                        active |= slider.dragged();
+                        ui.label(format!("{value}%"));
+                    });
+                    active |= ui.rect_contains_pointer(ui.max_rect());
+                });
+                close = ctx.input(|i| i.viewport().close_requested() || i.key_pressed(Key::Escape));
+                ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            },
+        );
+        self.quick_transparency(value, ctx);
+        if active {
+            self.opacity_keepalive = Some(Instant::now());
+        }
+        if close
+            || self
+                .opacity_keepalive
+                .is_none_or(|time| time.elapsed().as_millis() > 350)
+        {
+            self.opacity_open = false;
+            self.opacity_hover = None;
+            self.terminal_focus = true;
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+    }
+
     fn expand(&mut self, expanded: bool) {
         self.expanded = expanded;
         self.display_watch.request_repaint();
@@ -553,6 +864,9 @@ impl MiniTerm {
     }
 
     fn hide(&mut self) {
+        self.save_quick_transparency();
+        self.opacity_open = false;
+        self.opacity_hover = None;
         self.close_settings();
         self.notices_open = false;
         self.quit_confirm = false;
@@ -610,15 +924,23 @@ impl MiniTerm {
 
     fn close_settings(&mut self) {
         if self.settings_open {
-            self.settings = self.saved_settings.clone();
-            install_fonts(self.display_watch.context(), &self.settings.font_family);
-            self.load_fields();
-            self.rows.clear();
+            let ctx = self.display_watch.context();
+            ctx.send_viewport_cmd_to(settings_viewport_id(), egui::ViewportCommand::Close);
+            ctx.request_repaint();
+            native::wake_hidden(self.hwnd);
         }
         self.settings_open = false;
     }
 
     fn open_settings(&mut self) {
+        self.save_quick_transparency();
+        self.opacity_open = false;
+        self.opacity_hover = None;
+        self.edited_settings = self.settings.clone();
+        self.settings_observed = self.saved_settings.clone();
+        self.settings_error = None;
+        self.integration_feedback = None;
+        self.load_fields();
         self.available_monitors = native::monitors().unwrap_or_default();
         self.available_distributions = crate::shell::wsl_distributions();
         if self.distribution.is_empty() {
@@ -630,15 +952,42 @@ impl MiniTerm {
                 self.distribution = distro.name.clone();
             }
         }
-        self.expand(true);
+        let scale = self.last_scale as f32;
+        self.settings_position = self
+            .available_monitors
+            .iter()
+            .find(|monitor| monitor.name == self.settings.window.monitor)
+            .or_else(|| {
+                self.available_monitors
+                    .iter()
+                    .find(|monitor| monitor.primary)
+            })
+            .map(|monitor| {
+                Pos2::new(
+                    monitor.work.x as f32 / scale
+                        + (monitor.work.width as f32 / scale - SETTINGS_SIZE.x).max(0.0) / 2.0,
+                    monitor.work.y as f32 / scale
+                        + (monitor.work.height as f32 / scale - SETTINGS_SIZE.y).max(0.0) / 2.0,
+                )
+            });
         self.settings_open = true;
+        self.settings_native_ready = false;
         self.terminal_focus = false;
     }
 
     fn save_preferences(&mut self, ctx: &Context, settings: Settings) -> Result<(), String> {
         settings.validate()?;
-        settings.profile.command("validation")?;
-        if !settings.font_family.trim().is_empty() {
+        let previous = &self.saved_settings;
+        let profile_changed = settings.profile != previous.profile;
+        let font_changed = settings.font_family != previous.font_family;
+        let shortcut_changed = settings.shortcut != previous.shortcut;
+        let prompt_changed = settings.prompt != previous.prompt;
+        let theme_changed = settings.theme != previous.theme;
+        let placement_changed = window_placement_changed(&previous.window, &settings.window);
+        if profile_changed {
+            settings.profile.command("validation")?;
+        }
+        if font_changed && !settings.font_family.trim().is_empty() {
             let path = std::path::Path::new(&settings.font_family);
             let metadata =
                 std::fs::metadata(path).map_err(|_| "터미널 글꼴 파일을 찾지 못했습니다.")?;
@@ -650,35 +999,47 @@ impl MiniTerm {
                 .map_err(|_| "지원하는 TTF/OTF 글꼴 파일을 지정하세요.")?;
         }
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        self.display_watch.register_shortcut(&settings.shortcut)?;
+        if shortcut_changed {
+            self.display_watch.register_shortcut(&settings.shortcut)?;
+        }
         let start_changed = settings.autostart != self.saved_settings.autostart;
         if start_changed {
             if let Err(error) = native::autostart(&exe, settings.autostart) {
-                let _ = self
-                    .display_watch
-                    .register_shortcut(&self.saved_settings.shortcut);
+                if shortcut_changed {
+                    let _ = self
+                        .display_watch
+                        .register_shortcut(&self.saved_settings.shortcut);
+                }
                 return Err(error);
             }
         }
         let persisted = (|| {
-            for session in &self.sessions {
-                session.update_prompt(&settings.prompt)?;
+            if prompt_changed {
+                for session in &self.sessions {
+                    session.update_prompt(&settings.prompt)?;
+                }
             }
             settings.save(&self.settings_path)
         })();
         if let Err(error) = persisted {
-            for session in &self.sessions {
-                let _ = session.update_prompt(&self.saved_settings.prompt);
+            if prompt_changed {
+                for session in &self.sessions {
+                    let _ = session.update_prompt(&self.saved_settings.prompt);
+                }
             }
-            let _ = self
-                .display_watch
-                .register_shortcut(&self.saved_settings.shortcut);
+            if shortcut_changed {
+                let _ = self
+                    .display_watch
+                    .register_shortcut(&self.saved_settings.shortcut);
+            }
             if start_changed {
                 let _ = native::autostart(&exe, self.saved_settings.autostart);
             }
             return Err(error);
         }
-        install_fonts(ctx, &settings.font_family);
+        if font_changed {
+            install_fonts(ctx, &settings.font_family);
+        }
         *self
             .notification_preferences
             .lock()
@@ -686,18 +1047,24 @@ impl MiniTerm {
             (settings.notifications, settings.notification_sound);
         self.saved_settings = settings.clone();
         self.settings = settings;
-        self.transition = None;
-        if let Err(error) = native::position(
-            self.hwnd,
-            self.last_scale,
-            self.expanded,
-            &self.settings.window,
-        ) {
-            self.error = Some(error);
+        if placement_changed {
+            self.transition = None;
+            if let Err(error) = native::position(
+                self.hwnd,
+                self.last_scale,
+                self.expanded,
+                &self.settings.window,
+            ) {
+                self.error = Some(error);
+            }
         }
         self.rows.clear();
-        self.settings_open = false;
-        self.terminal_focus = true;
+        if theme_changed {
+            ctx.set_visuals(hud_visuals(self.settings.theme == "light"));
+            ctx.request_discard("theme changed");
+        }
+        ctx.request_repaint();
+        ctx.request_repaint_of(egui::ViewportId::ROOT);
         Ok(())
     }
 
@@ -733,15 +1100,12 @@ impl MiniTerm {
         if self.settings.theme == theme {
             return;
         }
-        self.settings.theme = theme.into();
-        self.rows.clear();
-        ctx.set_visuals(if theme == "light" {
-            egui::Visuals::light()
-        } else {
-            egui::Visuals::dark()
-        });
-        ctx.request_discard("theme changed");
-        ctx.request_repaint();
+        let mut settings = self.settings.clone();
+        settings.theme = theme.into();
+        match self.save_preferences(ctx, settings) {
+            Ok(()) => self.edited_settings.theme = theme.into(),
+            Err(error) => self.settings_error = Some(error),
+        }
     }
 
     fn header(&mut self, ui: &mut egui::Ui, ctx: &Context) {
@@ -755,19 +1119,12 @@ impl MiniTerm {
             }
             let title = ui
                 .add(
-                    egui::Label::new(
-                        egui::RichText::new(if compact { "›_" } else { "›_ MiniTerm" })
-                            .strong()
-                            .color(resolve_color(
-                                Color::Named(NamedColor::Cyan),
-                                &Default::default(),
-                                self.settings.theme == "light",
-                            )),
-                    )
-                    .selectable(false)
-                    .sense(Sense::click_and_drag()),
+                    egui::Image::new(&self.brand)
+                        .fit_to_exact_size(Vec2::splat(action_size))
+                        .sense(Sense::click_and_drag()),
                 )
-                .on_hover_text("드래그: 창 이동 · 더블 클릭: 확장/축소");
+                .on_hover_text("MiniTerm · 드래그: 창 이동 · 더블 클릭 / Ctrl+Alt+Enter: 확장/축소");
+            self.record_widget("header-brand", title.rect);
             if title.drag_started() {
                 self.transition = None;
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
@@ -789,7 +1146,11 @@ impl MiniTerm {
                 }
                 let tab = ui
                     .selectable_label(index == self.selected, label)
-                    .on_hover_text(format!("{}\n오른쪽 클릭: 세션 종료", session.label));
+                    .on_hover_text(format!("{}\nCtrl+Alt+{}: 이 탭 선택\nCtrl+Tab / Ctrl+Shift+Tab: 탭 이동\n오른쪽 클릭 / Ctrl+Shift+W: 세션 종료", session.label, index + 1));
+                self.record_widget(&format!("tab-{index}"), tab.rect);
+                if index == self.selected {
+                    self.record_widget("selected-tab", tab.rect);
+                }
                 if agent_status.as_ref().is_some_and(|status| status.unread) {
                     ui.painter().circle_filled(
                         tab.rect.right_top() + Vec2::new(-2.0, 2.0),
@@ -802,6 +1163,7 @@ impl MiniTerm {
                     self.terminal_focus = true;
                     self.composition.clear();
                     self.composing = false;
+                    self.rows.clear();
                 }
                 if tab.secondary_clicked() && self.header_gate.claim(frame) {
                     self.close_confirm = Some(index);
@@ -858,11 +1220,9 @@ impl MiniTerm {
                     },
                 ))
                 .truncate()
-                .show_tooltip_when_elided(false)
                 .selectable(false)
                 .sense(Sense::click_and_drag()),
             );
-            let state = state.on_hover_text(&status);
             if !status.is_empty() {
                 self.record_widget("session-title", state.rect);
             }
@@ -876,20 +1236,50 @@ impl MiniTerm {
             let drag_space = ui.available_rect_before_wrap();
             let actions = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let hide = ui.add(
-                    IconButton::new(ActionIcon::Hide, "HUD 숨기기 · 셸은 계속 실행됩니다")
-                        .size(action_size),
+                    IconButton::new(
+                        ActionIcon::Hide,
+                        "클릭: 숨기기 · 잠시 올려두기: 투명도 · Ctrl+Alt+휠: 투명도 조절",
+                    )
+                    .size(action_size),
                 );
                 self.record_widget("header-hide", hide.rect);
+                if hide.hovered()
+                    && !self.settings_open
+                    && !self.quit_confirm
+                    && self.close_confirm.is_none()
+                    && self.error.is_none()
+                {
+                    let start = self.opacity_hover.get_or_insert_with(Instant::now);
+                    self.opacity_keepalive = Some(Instant::now());
+                    if start.elapsed().as_millis() >= 450 {
+                        self.opacity_open = true;
+                        if let Ok(bounds) = native::window_bounds(self.hwnd) {
+                            self.opacity_anchor = Pos2::new(
+                                bounds.x as f32 / self.last_scale as f32 + hide.rect.center().x
+                                    - 36.0,
+                                bounds.y as f32 / self.last_scale as f32 + hide.rect.top() - 166.0,
+                            );
+                        }
+                    } else {
+                        ctx.request_repaint_after(std::time::Duration::from_millis(450));
+                    }
+                } else if !self.opacity_open {
+                    self.opacity_hover = None;
+                }
                 if hide.clicked() && self.header_gate.claim(frame) {
                     self.hide();
                 }
                 let layout = ui.add(
                     IconButton::new(
-                        ActionIcon::Layout,
                         if self.settings.window.mini_view == crate::geometry::MiniView::Summary {
-                            "미니 보기: 작업 요약 · 클릭하여 입력줄로 전환"
+                            ActionIcon::Summary
                         } else {
-                            "미니 보기: 입력줄 · 클릭하여 작업 요약으로 전환"
+                            ActionIcon::Terminal
+                        },
+                        if self.settings.window.mini_view == crate::geometry::MiniView::Summary {
+                            "미니 보기: 작업 요약 · 클릭 / Ctrl+Alt+M: 입력줄로 전환"
+                        } else {
+                            "미니 보기: 입력줄 · 클릭 / Ctrl+Alt+M: 작업 요약으로 전환"
                         },
                     )
                     .selected(self.settings.window.mini_view == crate::geometry::MiniView::Summary)
@@ -897,20 +1287,12 @@ impl MiniTerm {
                 );
                 self.record_widget("header-layout", layout.rect);
                 if layout.clicked() && self.header_gate.claim(frame) {
-                    self.settings.window.mini_view = match self.settings.window.mini_view {
-                        crate::geometry::MiniView::Input => crate::geometry::MiniView::Summary,
-                        crate::geometry::MiniView::Summary => crate::geometry::MiniView::Input,
-                    };
-                    self.saved_settings.window.mini_view = self.settings.window.mini_view;
-                    if let Err(error) = self.saved_settings.save(&self.settings_path) {
-                        self.error = Some(error);
-                    }
-                    self.rows.clear();
-                    self.terminal_focus = true;
+                    self.toggle_mini_view();
                 }
                 let add = ui.add_enabled(
                     self.sessions.len() + self.starting < 4,
-                    IconButton::new(ActionIcon::Add, "새 세션 · 최대 4개").size(action_size),
+                    IconButton::new(ActionIcon::Add, "새 탭 · Ctrl+Shift+T · 최대 4개")
+                        .size(action_size),
                 );
                 self.record_widget("header-add", add.rect);
                 if add.clicked() && self.header_gate.claim(frame) {
@@ -963,6 +1345,7 @@ impl MiniTerm {
         rect: Rect,
         font: &FontId,
         height: f32,
+        cell_width: f32,
     ) -> Rect {
         let preferences = &self.settings.window;
         let battery = preferences.mini_show_battery && snapshot.battery_row.is_some();
@@ -1154,17 +1537,31 @@ impl MiniTerm {
                         green,
                     );
                     self.record_widget("summary-progress", track);
+                    self.record_widget(
+                        "summary-progress-fill",
+                        Rect::from_min_size(
+                            track.min,
+                            Vec2::new(track.width() * percent as f32 / 100.0, track.height()),
+                        ),
+                    );
                 }
             }
         }
         if battery {
             self.record_widget("summary-battery", battery_rect);
-            ui.interact(
+            let response = ui.interact(
                 battery_rect,
                 ui.id().with("summary-battery"),
                 Sense::hover(),
-            )
-            .on_hover_text(snapshot.battery_text.as_deref().unwrap_or_default());
+            );
+            if let Some(text) = snapshot.battery_text.as_deref() {
+                if snapshot
+                    .battery_columns
+                    .is_some_and(|columns| columns as f32 * cell_width > battery_rect.width())
+                {
+                    response.on_hover_text(text);
+                }
+            }
             battery_rect
         } else {
             rect
@@ -1197,9 +1594,9 @@ impl MiniTerm {
         let Some(session) = self.sessions.get(self.selected) else {
             ui.centered_and_justified(|ui| {
                 ui.label(if self.starting > 0 {
-                    "Git Bash를 ConPTY에 연결하고 있습니다…"
+                    "셸에 연결하고 있습니다…"
                 } else {
-                    "설정에서 Git for Windows의 bash.exe를 지정하고 + 버튼으로 세션을 여세요."
+                    "+ 또는 Ctrl+Shift+T로 새 탭을 여세요. 트레이 메뉴에서 셸을 선택할 수 있습니다."
                 });
             });
             return;
@@ -1249,6 +1646,24 @@ impl MiniTerm {
             && !self.settings_open
             && !self.quit_confirm
             && self.close_confirm.is_none();
+        if let Some(trace) = &self.diagnostic_scroll {
+            let mut trace = trace.lock().unwrap_or_else(|p| p.into_inner());
+            trace.focused = focused;
+            trace.composing = self.composing;
+            trace.enter_events += input_events
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event,
+                        Event::Key {
+                            key: Key::Enter,
+                            pressed: true,
+                            ..
+                        }
+                    )
+                })
+                .count();
+        }
         if focused {
             response.request_focus();
         }
@@ -1264,12 +1679,12 @@ impl MiniTerm {
         });
         let render_rect = summary_snapshot
             .as_ref()
-            .map(|snapshot| self.paint_summary(ui, snapshot, rect, &font, height))
+            .map(|snapshot| self.paint_summary(ui, snapshot, rect, &font, height, width))
             .unwrap_or(rect);
         let mut term = session.term.lock();
         let cols = cols.min(term.columns() as u16);
         let offset = term.grid().display_offset();
-        let visible_rows: Vec<i32> = if let Some(snapshot) = &summary_snapshot {
+        let mut visible_rows: Vec<i32> = if let Some(snapshot) = &summary_snapshot {
             if self.settings.window.mini_show_battery {
                 snapshot.battery_row.into_iter().collect()
             } else {
@@ -1333,7 +1748,7 @@ impl MiniTerm {
                 );
             }
         }
-        let mut column_start = if mini && !summary {
+        let mut column_start = if mini && !summary && offset == 0 {
             crate::mini::horizontal_start(
                 term.grid().cursor.point.column.0,
                 cols as usize,
@@ -1373,6 +1788,8 @@ impl MiniTerm {
             )
         };
         let shift = ctx.input(|input| input.modifiers.shift);
+        let wheel_delta = ctx.input(|input| input.raw_scroll_delta.y);
+        let mut typed_input = false;
         let mouse_program = term.mode().intersects(TermMode::MOUSE_MODE) && !shift && !summary;
         let body_expansion = response.double_clicked() && !shift && self.header_gate.claim(frame);
         if response.double_clicked() && !mouse_program && !body_expansion && !summary {
@@ -1403,7 +1820,10 @@ impl MiniTerm {
         }
         if response.hovered() && !summary {
             let scroll = ctx.input(|input| input.raw_scroll_delta.y);
-            if scroll.abs() > 0.0 && self.scroll_gate.claim(frame) {
+            if scroll.abs() > 0.0
+                && !ctx.input(|input| opacity_modifiers(input.modifiers))
+                && self.scroll_gate.claim(frame)
+            {
                 if mouse_program {
                     if let Some(pos) = response.hover_pos() {
                         let p = point_at(pos);
@@ -1416,17 +1836,52 @@ impl MiniTerm {
                             true,
                         );
                     }
-                } else if term.mode().contains(TermMode::ALT_SCREEN) && !shift {
-                    let seq = if scroll > 0.0 { "\u{1b}[A" } else { "\u{1b}[B" };
-                    let _ = session.input.send(seq.repeat(3).into_bytes());
+                } else if let Some(data) = alternate_wheel_bytes(
+                    *term.mode(),
+                    shift,
+                    self.settings.alternate_scroll,
+                    scroll,
+                ) {
+                    let _ = session.input.send(data);
                 } else {
                     term.scroll_display(Scroll::Delta((scroll / height).round() as i32));
+                    if term.grid().display_offset() != offset {
+                        ctx.request_repaint();
+                    }
                 }
             }
         }
         if focused && !input_events.is_empty() && self.input_gate.claim(frame) {
             let mut input_batch = Vec::new();
+            let win32 = session.input.win32_mode();
+            let mut submitted = false;
             for event in input_events {
+                let is_text = matches!(&event, Event::Text(_) | Event::Ime(ImeEvent::Commit(_)));
+                let is_enter = matches!(
+                    &event,
+                    Event::Key {
+                        key: Key::Enter,
+                        pressed: true,
+                        ..
+                    }
+                );
+                if let Event::Key {
+                    key: Key::Enter,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } = &event
+                {
+                    if let Some(trace) = &self.diagnostic_scroll {
+                        trace
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .last_enter_modifiers =
+                            [modifiers.ctrl, modifiers.alt, modifiers.shift];
+                    }
+                }
+                submitted |= matches!(&event, Event::Key { key: Key::Enter, pressed: true, modifiers, .. } if !win32 || !modifiers.shift)
+                    || matches!(&event, Event::Key { key: Key::C, pressed: true, modifiers, .. } if modifiers.ctrl);
                 let data = match event {
                     Event::Ime(ImeEvent::Preedit(text)) => {
                         self.composing = !text.is_empty();
@@ -1436,7 +1891,11 @@ impl MiniTerm {
                     Event::Ime(ImeEvent::Commit(text)) => {
                         self.composing = false;
                         self.composition.clear();
-                        Some(text.into_bytes())
+                        Some(if win32 {
+                            crate::win32_input::text(&text, egui::Modifiers::NONE)
+                        } else {
+                            text.into_bytes()
+                        })
                     }
                     Event::Ime(ImeEvent::Disabled) => {
                         self.composing = false;
@@ -1445,7 +1904,9 @@ impl MiniTerm {
                     }
                     Event::Text(text) if !self.composing => {
                         let alt = ctx.input(|i| i.modifiers.alt);
-                        Some(if alt {
+                        Some(if win32 {
+                            crate::win32_input::text(&text, ctx.input(|i| i.modifiers))
+                        } else if alt {
                             format!("\u{1b}{text}").into_bytes()
                         } else {
                             text.into_bytes()
@@ -1455,20 +1916,37 @@ impl MiniTerm {
                         &text,
                         term.mode().contains(TermMode::BRACKETED_PASTE),
                     )),
-                    Event::Copy if shift => {
+                    Event::Copy if shift || term.selection_to_string().is_some() => {
                         if let Some(text) = term.selection_to_string() {
                             ctx.copy_text(text);
                         }
                         None
                     }
-                    Event::Copy => Some(vec![3]),
-                    Event::Cut => Some(vec![24]),
+                    Event::Copy => {
+                        submitted = true;
+                        Some(if win32 {
+                            crate::win32_input::key(Key::C, egui::Modifiers::CTRL).unwrap()
+                        } else {
+                            vec![3]
+                        })
+                    }
+                    Event::Cut => Some(if win32 {
+                        crate::win32_input::key(Key::X, egui::Modifiers::CTRL).unwrap()
+                    } else {
+                        vec![24]
+                    }),
                     Event::Key {
                         key,
                         pressed: true,
                         modifiers,
                         ..
-                    } if !self.composing => key_bytes(key, modifiers, *term.mode()),
+                    } if !self.composing => {
+                        if win32 {
+                            crate::win32_input::key(key, modifiers)
+                        } else {
+                            key_bytes(key, modifiers, *term.mode())
+                        }
+                    }
                     Event::PointerButton {
                         pos,
                         button: egui::PointerButton::Primary,
@@ -1517,12 +1995,30 @@ impl MiniTerm {
                     _ => None,
                 };
                 if let Some(data) = data {
+                    if is_enter {
+                        if let Some(trace) = &self.diagnostic_scroll {
+                            let mut trace = trace.lock().unwrap_or_else(|p| p.into_inner());
+                            trace.enter_encoded += 1;
+                            trace.last_enter_win32 = win32;
+                            trace.last_enter_frame = frame;
+                        }
+                    }
+                    if is_text {
+                        if let Some(trace) = &self.diagnostic_scroll {
+                            trace
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .last_text_frame = frame;
+                        }
+                    }
                     input_batch.extend(data);
                 }
             }
             if !input_batch.is_empty() {
+                typed_input = true;
                 term.scroll_display(Scroll::Bottom);
-                let submitted = input_batch.contains(&b'\r') || input_batch.contains(&3);
+                let submitted = submitted
+                    || (!win32 && (input_batch.contains(&b'\r') || input_batch.contains(&3)));
                 if let Err(error) = session.input.send(input_batch) {
                     self.error = Some(error);
                 } else if submitted {
@@ -1537,6 +2033,70 @@ impl MiniTerm {
                     }
                     ctx.request_repaint();
                 }
+            }
+        }
+        // Wheel and typed input can both change the viewport above. Paint the
+        // resulting rows in this frame, even when the CLI is idle and emits no
+        // further output to trigger a repaint.
+        let paint_offset = term.grid().display_offset();
+        if paint_offset != offset && !summary {
+            visible_rows = if mini {
+                crate::mini::preview_rows(
+                    &term,
+                    if self.settings.window.mini_show_output {
+                        rows
+                    } else {
+                        1
+                    },
+                    true,
+                )
+            } else {
+                (0..rows as i32)
+                    .map(|row| row - paint_offset as i32)
+                    .collect()
+            };
+            column_start = if mini && paint_offset == 0 {
+                crate::mini::horizontal_start(
+                    term.grid().cursor.point.column.0,
+                    cols as usize,
+                    term.columns(),
+                )
+            } else {
+                0
+            };
+            if column_start > 0
+                && term.grid()[term.grid().cursor.point.line][Column(column_start)]
+                    .flags
+                    .contains(Flags::WIDE_CHAR_SPACER)
+            {
+                column_start -= 1;
+            }
+        }
+        if paint_offset > 0 {
+            self.record_widget("terminal-scrolled", render_rect);
+        }
+        if let Some(state) = &self.diagnostic_scroll {
+            let mut state = state.lock().unwrap_or_else(|p| p.into_inner());
+            state.win32_input = session.input.win32_mode();
+            state.alternate_screen = term.mode().contains(TermMode::ALT_SCREEN);
+            state.mouse_reporting = term.mode().intersects(TermMode::MOUSE_MODE);
+            state.history_lines = term.grid().history_size();
+            state.display_offset = paint_offset;
+            state.codex_ready = false;
+            state.codex_writer_blocked = false;
+            for row in 0..term.screen_lines() {
+                let line = (0..term.columns())
+                    .map(|column| term.grid()[Line(row as i32)][Column(column)].c)
+                    .collect::<String>();
+                state.codex_ready |= line.contains("OpenAI Codex");
+                state.codex_writer_blocked |=
+                    line.contains("This conversation is open in another app");
+            }
+            if wheel_delta != 0.0 {
+                state.wheel_events += 1;
+                state.last_wheel_delta = wheel_delta;
+                state.last_wheel_hovered = response.hovered();
+                state.last_wheel_typed = typed_input;
             }
         }
         let rect = render_rect;
@@ -1756,9 +2316,15 @@ impl MiniTerm {
 
     fn prompt_settings_content(&mut self, ui: &mut egui::Ui) {
         use crate::prompt::PathStyle;
-        ui.heading("한 줄 프롬프트").on_hover_text("저장하면 열린 세션의 다음 프롬프트부터 적용됩니다. 실행 중인 명령과 입력은 유지합니다.");
-        let prompt = &mut self.settings.prompt;
-        ui.checkbox(&mut prompt.enabled, "MiniTerm 프롬프트 사용")
+        settings_section(
+            ui,
+            "한 줄 프롬프트",
+            "열린 세션의 다음 프롬프트부터 적용됩니다.",
+        );
+        let field_width = (ui.available_width() - 140.0).clamp(80.0, 230.0);
+        let prompt = &mut self.edited_settings.prompt;
+        let enabled = ui
+            .checkbox(&mut prompt.enabled, "MiniTerm 프롬프트 사용")
             .on_hover_text("끄면 셸 초기화 파일에서 지정한 프롬프트를 사용합니다.");
         ui.add_enabled_ui(prompt.enabled, |ui| {
             egui::Grid::new("prompt-fields").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
@@ -1768,7 +2334,7 @@ impl MiniTerm {
                     (&mut prompt.show_path, "경로", &mut prompt.path_label),
                 ] {
                     ui.checkbox(shown, label);
-                    ui.add_enabled(*shown, egui::TextEdit::singleline(alias).desired_width(230.0).hint_text("비우면 실제 정보"))
+                    ui.add_enabled(*shown, egui::TextEdit::singleline(alias).desired_width(field_width).hint_text("비우면 실제 정보").font(egui::TextStyle::Body))
                         .on_hover_text("별칭을 지정해 표시를 바꿀 수 있습니다. 실제 사용자·호스트·작업 폴더는 바뀌지 않습니다.");
                     ui.end_row();
                 }
@@ -1789,19 +2355,23 @@ impl MiniTerm {
             });
             ui.add_space(12.0);
             ui.label("미리보기");
-            egui::Frame::new().fill(background(self.settings.theme == "light")).corner_radius(8).inner_margin(12).show(ui, |ui| {
+            egui::Frame::new().fill(background(self.edited_settings.theme == "light")).corner_radius(8).inner_margin(12).show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(egui::RichText::new(format!("{}▏", prompt.preview())).monospace());
                 });
             }).response.on_hover_text("자동 정보는 예시입니다. 세션에서는 현재 사용자·호스트·폴더가 표시됩니다. 긴 프롬프트는 창 너비에 따라 줄이 접힙니다.");
         });
+        self.record_widget("settings-prompt-enabled", enabled.rect);
     }
 
     fn settings_content(&mut self, ui: &mut egui::Ui, ctx: &Context) {
         match self.settings_tab {
             0 => {
-                ui.heading("새 세션의 셸")
-                    .on_hover_text("셸·시작 폴더·스크롤백 변경은 새 세션에 적용됩니다.");
+                settings_section(
+                    ui,
+                    "새 탭의 셸",
+                    "셸·시작 폴더·스크롤백은 다음에 여는 탭부터 적용됩니다.",
+                );
                 ui.horizontal(|ui| {
                     ui.radio_value(&mut self.wsl, false, "Git Bash");
                     ui.radio_value(&mut self.wsl, true, "WSL Bash");
@@ -1838,12 +2408,15 @@ impl MiniTerm {
                     ui.label("Windows 시작 폴더 (비우면 사용자 홈)");
                     ui.text_edit_singleline(&mut self.bash_directory);
                 }
-                ui.add(
-                    egui::Slider::new(&mut self.settings.scrollback, 1000..=50000)
-                        .text("새 세션 스크롤백"),
-                );
-                ui.separator();
-                ui.heading("화면");
+                ui.label("새 탭 스크롤백 (줄)");
+                ui.add(egui::Slider::new(
+                    &mut self.edited_settings.scrollback,
+                    1000..=50000,
+                ));
+                let alternate_scroll = ui.checkbox(&mut self.edited_settings.alternate_scroll, "전체 화면 앱에서 휠로 방향키 이동")
+                    .on_hover_text("기본값은 꺼짐입니다. 켜면 마우스를 처리하지 않는 vim·less에서 이동할 수 있지만 Codex 입력 이력이 바뀔 수 있습니다. Shift+휠은 터미널 기록을 스크롤합니다.");
+                self.record_widget("settings-alternate-scroll", alternate_scroll.rect);
+                settings_section(ui, "글꼴과 테마", "현재 터미널에도 바로 적용됩니다.");
                 ui.horizontal(|ui| {
                     ui.label("테마");
                     for (icon, theme, hint) in [
@@ -1851,37 +2424,37 @@ impl MiniTerm {
                         (ActionIcon::Sun, "light", "라이트 테마"),
                     ] {
                         let button = ui.add(
-                            IconButton::new(icon, hint).selected(self.settings.theme == theme),
+                            IconButton::new(icon, hint)
+                                .selected(self.edited_settings.theme == theme),
                         );
                         self.record_widget(&format!("theme-{theme}"), button.rect);
-                        if button.clicked() && self.settings.theme != theme {
-                            self.set_theme(ui.ctx(), theme);
+                        if button.clicked() && self.edited_settings.theme != theme {
+                            self.edited_settings.theme = theme.into();
                         }
                     }
                 });
-                ui.add(egui::Slider::new(&mut self.settings.font_size, 10..=24).text("글꼴 크기"));
-                let previous_font = self.settings.font_family.clone();
+                ui.label("터미널 글꼴 크기");
+                let font_size = ui.add(egui::Slider::new(
+                    &mut self.edited_settings.font_size,
+                    10..=24,
+                ));
+                self.record_widget("settings-font-size", font_size.rect);
                 let choices = font_choices();
                 let chosen = choices
                     .iter()
-                    .find(|(_, p)| p == &self.settings.font_family)
+                    .find(|(_, p)| p == &self.edited_settings.font_family)
                     .map(|(name, _)| name.as_str())
                     .unwrap_or("사용자 글꼴");
                 egui::ComboBox::from_id_salt("terminal-font")
                     .selected_text(chosen)
                     .show_ui(ui, |ui| {
                         for (name, path) in choices {
-                            ui.selectable_value(&mut self.settings.font_family, path, name);
+                            ui.selectable_value(&mut self.edited_settings.font_family, path, name);
                         }
                     });
-                if previous_font != self.settings.font_family {
-                    install_fonts(ui.ctx(), &self.settings.font_family);
-                    self.rows.clear();
-                    ui.ctx().request_repaint();
-                }
                 ui.collapsing("추가 글꼴 파일", |ui| {
                     ui.label("TTF/OTF 파일 경로");
-                    ui.text_edit_singleline(&mut self.settings.font_family);
+                    ui.text_edit_singleline(&mut self.edited_settings.font_family);
                 });
                 ui.horizontal_wrapped(|ui| {
                     for (text, color, style) in [
@@ -1896,19 +2469,23 @@ impl MiniTerm {
                         };
                         ui.label(
                             egui::RichText::new(text)
-                                .font(FontId::new(self.settings.font_size as f32, family))
+                                .font(FontId::new(self.edited_settings.font_size as f32, family))
                                 .color(resolve_color(
                                     Color::Named(color),
                                     &Default::default(),
-                                    self.settings.theme == "light",
+                                    self.edited_settings.theme == "light",
                                 )),
                         );
                     }
                 });
             }
             1 => {
-                ui.heading("창 배치");
-                let preferences = &mut self.settings.window;
+                settings_section(
+                    ui,
+                    "창 위치",
+                    "창의 헤더를 드래그하면 위치를 옮길 수 있습니다.",
+                );
+                let preferences = &mut self.edited_settings.window;
                 egui::ComboBox::from_id_salt("hud-monitor")
                     .selected_text(if preferences.monitor.is_empty() {
                         "주 모니터"
@@ -1954,10 +2531,10 @@ impl MiniTerm {
                         }
                     });
                 }
-                ui.add(
-                    egui::Slider::new(&mut preferences.right, 0..=400).text("오른쪽 간격 (DIP)"),
-                );
-                ui.add(egui::Slider::new(&mut preferences.bottom, 0..=400).text("아래 간격 (DIP)"));
+                ui.label("오른쪽 간격 (DIP)");
+                ui.add(egui::Slider::new(&mut preferences.right, 0..=400));
+                ui.label("아래 간격 (DIP)");
+                ui.add(egui::Slider::new(&mut preferences.bottom, 0..=400));
                 ui.checkbox(&mut preferences.reduced_motion, "동작 줄이기")
                     .on_hover_text("Windows에서 애니메이션을 끈 경우에도 즉시 크기를 변경합니다.");
                 ui.checkbox(
@@ -1969,8 +2546,7 @@ impl MiniTerm {
                 );
                 ui.label("본문·제목을 더블 클릭하면 확장하거나 축소합니다.")
                     .on_hover_text("한 번 클릭하면 포커스만 이동합니다. Shift + 더블 클릭은 터미널의 단어 선택에 사용합니다.");
-                ui.separator();
-                ui.heading("미니 화면 표시");
+                settings_section(ui, "미니 화면", "축소했을 때 표시할 내용을 선택하세요.");
                 ui.horizontal(|ui| {
                     ui.selectable_value(
                         &mut preferences.mini_view,
@@ -1994,56 +2570,139 @@ impl MiniTerm {
                 );
                 ui.checkbox(&mut preferences.mini_show_output, "최근 활동")
                     .on_hover_text("명령문 대신 파일 확인·코드 검색·검증 같은 활동을 표시합니다.");
-                ui.separator();
-                ui.heading("창 모양");
-                ui.add(egui::Slider::new(&mut preferences.transparency, 0..=80).text("투명도 (%)"))
-                    .on_hover_text("0은 불투명입니다. 창과 글자가 함께 투명해집니다. 저장 전 미리 볼 수 있고 취소하면 복원됩니다.");
-                ui.separator();
+                settings_section(
+                    ui,
+                    "투명도",
+                    "창과 글자가 함께 투명해집니다. 0%는 불투명입니다.",
+                );
+                let transparency =
+                    ui.add(egui::Slider::new(&mut preferences.transparency, 0..=80).suffix("%"));
+                self.record_widget("settings-transparency", transparency.rect);
+                settings_section(ui, "시작과 단축키", "단축키로 창을 표시하거나 숨깁니다.");
                 ui.label("전역 단축키 (비우면 사용하지 않음)");
-                ui.text_edit_singleline(&mut self.settings.shortcut);
+                let shortcut = ui.text_edit_singleline(&mut self.edited_settings.shortcut);
+                self.record_widget("settings-shortcut", shortcut.rect);
                 ui.checkbox(
-                    &mut self.settings.autostart,
+                    &mut self.edited_settings.autostart,
                     "Windows 로그인 시 MiniTerm 시작",
                 );
+                ui.add_space(10.0);
+                egui::CollapsingHeader::new("키보드 단축키").show(ui, |ui| {
+                    egui::Grid::new("keyboard-shortcuts")
+                        .spacing(Vec2::new(16.0, 10.0))
+                        .show(ui, |ui| {
+                            for (keys, action) in [
+                                ("Ctrl+Shift+T", "새 탭"),
+                                ("Ctrl+Shift+W", "현재 탭 닫기 (확인)"),
+                                ("Ctrl+Tab / Ctrl+Shift+Tab", "다음 / 이전 탭"),
+                                ("Ctrl+Alt+1~4", "번호로 탭 선택"),
+                                ("Ctrl+,", "설정"),
+                                ("Ctrl+Shift+C / Ctrl+Shift+V", "선택 복사 / 붙여넣기"),
+                                ("Ctrl++ / Ctrl+- / Ctrl+0", "글꼴 확대 / 축소 / 기본"),
+                                ("Ctrl+Shift+↑ / ↓", "기록 위 / 아래"),
+                                ("Ctrl+Shift+PageUp / PageDown", "기록 한 페이지 이동"),
+                                ("Ctrl+Shift+Home / End", "기록 처음 / 마지막"),
+                                ("Ctrl+Alt+Enter", "확장 / 축소"),
+                                ("Ctrl+Alt+M", "입력 / 요약 전환"),
+                            ] {
+                                ui.label(egui::RichText::new(keys).size(12.0));
+                                ui.label(action);
+                                ui.end_row();
+                            }
+                        });
+                });
             }
             3 => self.prompt_settings_content(ui),
-            _ => {
-                ui.heading("Windows 알림");
-                ui.checkbox(
-                    &mut self.settings.notifications,
-                    "백그라운드 세션의 Windows 알림",
+            4 => {
+                settings_section(
+                    ui,
+                    "Codex의 Bash 실행",
+                    "Windows Codex의 기본 실행 셸을 Git Bash로 연결합니다.",
                 );
-                ui.checkbox(&mut self.settings.notification_sound, "알림 소리");
-                ui.heading("응답 알림").on_hover_text("응답 완료는 에이전트의 응답 종료를 뜻합니다. 작업의 성공 여부는 터미널에서 확인하세요.");
-                if !notification::is_registered() {
-                    ui.label("앱을 설치하거나 알림을 등록하세요.");
-                    if ui
-                        .add(IconButton::new(ActionIcon::Bell, "Windows 알림 등록").size(26.0))
-                        .clicked()
-                        && self.settings_gate.claim(ctx.cumulative_frame_nr())
-                    {
-                        if let Err(error) = std::env::current_exe()
-                            .map_err(|e| e.to_string())
-                            .and_then(|path| notification::register(&path))
-                        {
-                            self.error = Some(error);
+                ui.label("Bash 명령을 사용하면서 기존 대화를 같은 Codex 서버에서 이어갑니다.");
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    for (label, enabled) in [("Bash 연결 적용", true), ("연결 해제", false)] {
+                        let button = ui.button(label);
+                        self.record_widget(&format!("settings-codex-bash-{enabled}"), button.rect);
+                        if button.clicked() && self.settings_gate.claim(ctx.cumulative_frame_nr()) {
+                            let selected = (!self.wsl && !self.bash_path.trim().is_empty()).then(|| std::path::Path::new(self.bash_path.trim()));
+                            let result = std::env::current_exe().map_err(|e| e.to_string()).and_then(|helper| crate::codex_bash::configure_user_with_bash(&helper, selected, enabled));
+                            self.integration_feedback = Some(match result {
+                                Ok(()) => (true, "Codex 실행 환경을 변경했습니다. 실행 중인 Codex를 모두 닫은 뒤 공유 서버를 다시 시작하세요.".into()),
+                                Err(error) => (false, error),
+                            });
                         }
                     }
+                });
+                ui.add_space(16.0);
+                ui.label("MiniTerm 밖에서 실행하는 Windows Codex에도 적용됩니다.");
+                ui.label("모델·승인·접근 권한과 기존 지침은 유지합니다.");
+                ui.add_space(16.0);
+                ui.label("Codex를 모두 종료한 뒤 서버를 다시 시작하는 명령:");
+                ui.monospace("codex app-server daemon restart");
+            }
+            _ => {
+                settings_section(ui, "팝업 알림", "다른 앱·탭을 보고 있을 때만 알려줍니다.");
+                let notifications =
+                    ui.checkbox(&mut self.edited_settings.notifications, "Windows 팝업 표시");
+                self.record_widget("settings-notifications", notifications.rect);
+                let sound = ui.add_enabled(
+                    self.edited_settings.notifications,
+                    egui::Checkbox::new(
+                        &mut self.edited_settings.notification_sound,
+                        "팝업과 함께 소리 재생",
+                    ),
+                );
+                self.record_widget("settings-notification-sound", sound.rect);
+                ui.label("알림을 클릭하면 해당 탭으로 돌아갑니다.");
+                ui.label(
+                    egui::RichText::new("팝업을 꺼도 받은 알림은 트레이의 알림 목록에 남습니다.")
+                        .weak(),
+                );
+                if !notification::is_registered() {
+                    ui.label("이 실행 파일의 Windows 알림 등록이 필요합니다.");
+                    if ui.button("Windows에 알림 등록").clicked()
+                        && self.settings_gate.claim(ctx.cumulative_frame_nr())
+                    {
+                        self.integration_feedback = Some(
+                            match std::env::current_exe()
+                                .map_err(|e| e.to_string())
+                                .and_then(|path| notification::register(&path))
+                            {
+                                Ok(()) => (true, "Windows 알림을 등록했습니다.".into()),
+                                Err(error) => (false, error),
+                            },
+                        );
+                    }
                 }
-                ui.separator();
-                ui.heading("Windows 에이전트 연결")
-                    .on_hover_text("기존 notify·훅을 보존하며 사용자 설정에 연결을 추가합니다.");
-                for (name, agent) in [
-                    ("Codex", crate::agent::Agent::Codex),
-                    ("Claude Code", crate::agent::Agent::Claude),
+                settings_section(
+                    ui,
+                    "CLI 응답 알림 등록",
+                    "등록한 CLI의 응답 상태를 MiniTerm에서 알려줍니다.",
+                );
+                for (name, agent, description) in [
+                    (
+                        "Codex",
+                        crate::agent::Agent::Codex,
+                        "응답 완료·승인 요청을 해당 탭에 알립니다. 등록 후 Codex를 새로 실행하세요.",
+                    ),
+                    (
+                        "Claude Code",
+                        crate::agent::Agent::Claude,
+                        "응답 종료·응답 오류·승인이나 입력이 필요할 때 알려줍니다.",
+                    ),
                 ] {
-                    ui.horizontal(|ui| {
-                        ui.label(name);
-                        for (icon, hint, enable) in [
-                            (ActionIcon::Link, "에이전트 알림 연결", true),
-                            (ActionIcon::Unlink, "에이전트 알림 연결 해제", false),
+                    ui.add_space(6.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(egui::RichText::new(name).strong());
+                        for (label, enable) in [
+                            ("알림 등록", true),
+                            ("등록 해제", false),
                         ] {
-                            if ui.add(IconButton::new(icon, hint).size(26.0)).clicked()
+                            let button = ui.button(label);
+                            self.record_widget(&format!("settings-integration-{}-{enable}", if name == "Codex" { "codex" } else { "claude" }), button.rect);
+                            if button.clicked()
                                 && self.settings_gate.claim(ctx.cumulative_frame_nr())
                             {
                                 let result = std::env::current_exe()
@@ -2051,18 +2710,212 @@ impl MiniTerm {
                                     .and_then(|path| {
                                         crate::integration::configure_user(agent, &path, enable)
                                     });
-                                if let Err(error) = result {
-                                    self.error = Some(error);
-                                }
+                                self.integration_feedback = Some(match result {
+                                    Ok(()) => (true, if enable && agent == crate::agent::Agent::Codex {
+                                        "Codex 알림을 등록했습니다. 다음 실행부터 해당 탭에 알려줍니다.".into()
+                                    } else if enable {
+                                        format!("{name} 알림을 등록했습니다. 새 MiniTerm 탭에서 {name}를 시작하세요.")
+                                    } else {
+                                        format!("{name} 알림 등록을 해제했습니다. 다음 실행부터 적용됩니다.")
+                                    }),
+                                    Err(error) => (false, error),
+                                });
                             }
                         }
                     });
+                    ui.label(egui::RichText::new(description).weak());
                 }
+                ui.add_space(10.0);
+                ui.label(
+                    "등록 후 새 탭에서 CLI를 시작하세요. 응답 종료는 작업 성공을 뜻하지 않습니다.",
+                );
+                ui.label(egui::RichText::new("Windows CLI의 알림 설정을 추가하고 기존 설정은 보존합니다. WSL 안의 CLI는 지원하지 않습니다.").weak());
             }
         }
     }
 
+    fn settings_viewport(&mut self, parent_ctx: &Context) {
+        if !self.settings_open {
+            return;
+        }
+        if self.settings_observed != self.saved_settings {
+            self.edited_settings = self
+                .edited_settings
+                .with_edits(&self.settings_observed, &self.saved_settings);
+            self.settings_observed = self.saved_settings.clone();
+        }
+        let mut builder = egui::ViewportBuilder::default()
+            .with_title("MiniTerm 설정")
+            .with_icon(crate::brand::window_icon())
+            .with_inner_size(SETTINGS_SIZE)
+            .with_min_inner_size(SETTINGS_SIZE)
+            .with_max_inner_size(SETTINGS_SIZE)
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_taskbar(false)
+            .with_always_on_top();
+        if let Some(position) = self.settings_position {
+            builder = builder.with_position(position);
+        }
+        let mut close = false;
+        parent_ctx.show_viewport_immediate(settings_viewport_id(), builder, |ctx, _| {
+            if !self.diagnostic_settings_keys.is_empty() {
+                let keys = std::mem::take(&mut self.diagnostic_settings_keys);
+                ctx.input_mut(|input| input.events.extend(keys));
+            }
+            if !self.settings_native_ready {
+                self.settings_native_ready = native::relay_settings_paints(self.hwnd);
+            }
+            ctx.set_visuals(hud_visuals(self.settings.theme == "light"));
+            let before = self.edited_settings.clone();
+            let panel = egui::CentralPanel::default()
+                .frame(
+                    egui::Frame::new()
+                        .fill(background(self.settings.theme == "light"))
+                        .stroke(Stroke::new(
+                            1.0,
+                            ctx.style().visuals.widgets.noninteractive.bg_stroke.color,
+                        ))
+                        // The native window owns its outer corner. A rounded
+                        // frame inside an opaque rectangular surface exposes
+                        // the renderer's clear color behind those corners.
+                        .corner_radius(0)
+                        .inner_margin(18),
+                )
+                .show(ctx, |ui| {
+                    settings_style(ui);
+                    let header = ui.horizontal(|ui| {
+                        ui.add(egui::Image::new(&self.brand).fit_to_exact_size(Vec2::splat(24.0)));
+                        ui.label(egui::RichText::new("설정").size(18.0).strong());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let button = ui
+                                .add(IconButton::new(ActionIcon::Close, "설정창 닫기").size(28.0));
+                            self.record_widget("settings-close", button.rect);
+                            close = button.clicked();
+                        });
+                    });
+                    let drag_rect = Rect::from_min_max(
+                        header.response.rect.min,
+                        header.response.rect.right_bottom() - Vec2::new(40.0, 0.0),
+                    );
+                    if ui
+                        .interact(
+                            drag_rect,
+                            ui.id().with("settings-drag"),
+                            Sense::click_and_drag(),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::Grab)
+                        .drag_started()
+                    {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    }
+                    ui.add_space(8.0);
+                    ui.horizontal_wrapped(|ui| {
+                        for (tab, name) in [
+                            (0, "터미널"),
+                            (1, "창과 동작"),
+                            (2, "알림"),
+                            (3, "프롬프트"),
+                            (4, "Codex"),
+                        ] {
+                            let button = ui.selectable_label(self.settings_tab == tab, name);
+                            self.record_widget(&format!("settings-tab-{tab}"), button.rect);
+                            if button.clicked() {
+                                self.settings_tab = tab;
+                            }
+                        }
+                    });
+                    ui.add_space(6.0);
+                    ui.separator();
+                    let scroll = egui::ScrollArea::vertical()
+                        .id_salt(("settings", self.settings_tab))
+                        .max_height(
+                            (ui.available_height()
+                                - if self.settings_error.is_some()
+                                    || self.integration_feedback.is_some()
+                                {
+                                    78.0
+                                } else {
+                                    0.0
+                                })
+                            .max(40.0),
+                        )
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            self.settings_content(ui, ctx);
+                        });
+                    self.record_widget("settings-scroll", scroll.inner_rect);
+                    if let Some(error) = &self.settings_error {
+                        ui.separator();
+                        let message = ui.colored_label(
+                            ui.visuals().error_fg_color,
+                            format!("적용하지 못했습니다: {error}"),
+                        );
+                        self.record_widget("settings-error", message.rect);
+                    } else if let Some((ok, message)) = &self.integration_feedback {
+                        ui.separator();
+                        let color = if *ok {
+                            ui.visuals().selection.stroke.color
+                        } else {
+                            ui.visuals().error_fg_color
+                        };
+                        let feedback = ui.colored_label(color, message);
+                        self.record_widget("settings-integration-feedback", feedback.rect);
+                    }
+                });
+            self.record_widget("settings-window", panel.response.rect);
+            self.edited_settings.profile = if self.wsl {
+                ShellProfile::Wsl {
+                    distribution: self.distribution.clone(),
+                    user: (!self.wsl_user.trim().is_empty())
+                        .then(|| self.wsl_user.trim().to_owned()),
+                    directory: if self.wsl_directory.trim().is_empty() {
+                        "~".into()
+                    } else {
+                        self.wsl_directory.trim().into()
+                    },
+                }
+            } else {
+                ShellProfile::GitBash {
+                    bash_path: nonempty_path(&self.bash_path),
+                    directory: nonempty_path(&self.bash_directory),
+                }
+            };
+            if before != self.edited_settings && self.settings_gate.claim(ctx.cumulative_frame_nr())
+            {
+                let next = self
+                    .saved_settings
+                    .with_edits(&before, &self.edited_settings);
+                let previous_error = self.settings_error.take();
+                let result = if next == self.saved_settings {
+                    Ok(())
+                } else {
+                    self.save_preferences(ctx, next)
+                };
+                self.settings_error = match result {
+                    Err(error) => Some(error),
+                    Ok(()) if self.edited_settings == self.saved_settings => None,
+                    Ok(()) => previous_error,
+                };
+            }
+
+            close |= ctx.input(|input| {
+                input.viewport().close_requested() || input.key_pressed(Key::Escape)
+            });
+        });
+        if close {
+            self.close_settings();
+            self.terminal_focus = true;
+        }
+    }
+
     fn dialogs(&mut self, ctx: &Context) {
+        if (self.quit_confirm || self.close_confirm.is_some()) && ctx.input_mut(take_plain_escape) {
+            self.quit_confirm = false;
+            self.close_confirm = None;
+            self.terminal_focus = true;
+        }
         if self.notices_open {
             let notices = self
                 .broker
@@ -2079,7 +2932,7 @@ impl MiniTerm {
                 .show(ctx, |ui| {
                     ui.label("응답 완료는 에이전트의 응답 종료를 뜻합니다.");
                     if notices.is_empty() {
-                        ui.label("아직 받은 알림이 없습니다. 설정에서 에이전트를 연결하세요.");
+                        ui.label("아직 받은 알림이 없습니다. 설정의 알림에서 CLI 응답 알림을 등록하세요.");
                     }
                     egui::ScrollArea::vertical()
                         .max_height(350.0)
@@ -2116,142 +2969,62 @@ impl MiniTerm {
                 self.terminal_focus = true;
             }
         }
-        if self.settings_open {
-            let mut open = true;
-            let available = ctx.available_rect().size() - Vec2::splat(24.0);
-            egui::Window::new("MiniTerm 설정")
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-                .fixed_size(Vec2::new(
-                    available.x.clamp(220.0, 490.0),
-                    available.y.clamp(120.0, 520.0),
-                ))
-                .show(ctx, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        for (tab, icon, hint) in [
-                            (0, ActionIcon::Terminal, "터미널 설정"),
-                            (1, ActionIcon::Layout, "창·동작 설정"),
-                            (2, ActionIcon::Bell, "알림·연결 설정"),
-                            (3, ActionIcon::Prompt, "프롬프트 설정"),
-                        ] {
-                            let button = ui.add(
-                                IconButton::new(icon, hint)
-                                    .selected(self.settings_tab == tab)
-                                    .size(28.0),
-                            );
-                            self.record_widget(&format!("settings-tab-{tab}"), button.rect);
-                            if button.clicked() {
-                                self.settings_tab = tab;
-                            }
-                        }
-                    });
-                    ui.separator();
-                    egui::ScrollArea::vertical()
-                        .id_salt(("settings", self.settings_tab))
-                        .max_height((ui.available_height() - 40.0).max(60.0))
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| self.settings_content(ui, ctx));
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        let save =
-                            ui.add(IconButton::new(ActionIcon::Save, "설정 저장").size(26.0));
-                        self.record_widget("settings-save", save.rect);
-                        if save.clicked() && self.settings_gate.claim(ctx.cumulative_frame_nr()) {
-                            let mut settings = self.settings.clone();
-                            settings.profile = if self.wsl {
-                                ShellProfile::Wsl {
-                                    distribution: self.distribution.clone(),
-                                    user: (!self.wsl_user.trim().is_empty())
-                                        .then(|| self.wsl_user.trim().to_owned()),
-                                    directory: if self.wsl_directory.trim().is_empty() {
-                                        "~".into()
-                                    } else {
-                                        self.wsl_directory.trim().into()
-                                    },
-                                }
-                            } else {
-                                ShellProfile::GitBash {
-                                    bash_path: nonempty_path(&self.bash_path),
-                                    directory: nonempty_path(&self.bash_directory),
-                                }
-                            };
-                            if let Err(error) = self.save_preferences(ctx, settings) {
-                                self.error = Some(error);
-                            }
-                        }
-                        let cancel =
-                            ui.add(IconButton::new(ActionIcon::Close, "변경 취소").size(26.0));
-                        self.record_widget("settings-cancel", cancel.rect);
-                        if cancel.clicked() && self.settings_gate.claim(ctx.cumulative_frame_nr()) {
-                            self.close_settings();
-                            self.terminal_focus = true;
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .add(
-                                    IconButton::new(ActionIcon::Power, "앱 종료…")
-                                        .size(26.0)
-                                        .danger(),
-                                )
-                                .clicked()
-                            {
-                                self.quit_confirm = true;
-                            }
-                        });
-                    });
-                });
-            if !open {
-                self.close_settings();
-                self.terminal_focus = true;
-            }
-        }
         if self.quit_confirm || self.close_confirm.is_some() {
-            egui::Window::new("종료 확인")
+            let all = self.quit_confirm;
+            let width = (ctx.available_rect().width() - 32.0).clamp(200.0, 320.0);
+            let dialog = egui::Window::new("종료 확인")
+                .title_bar(false)
                 .collapsible(false)
                 .resizable(false)
+                .min_width(width)
+                .max_width(width)
+                .default_width(width)
+                .frame(
+                    egui::Frame::new()
+                        .fill(background(self.settings.theme == "light"))
+                        .stroke(Stroke::new(
+                            1.0,
+                            ctx.style().visuals.widgets.noninteractive.bg_stroke.color,
+                        ))
+                        .corner_radius(10)
+                        .inner_margin(12),
+                )
                 .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
                 .show(ctx, |ui| {
-                    ui.label(if self.quit_confirm {
-                        "MiniTerm을 종료하면 모든 Bash와 실행 중인 프로그램도 종료됩니다."
+                    settings_style(ui);
+                    ui.label(if all {
+                        "모든 탭과 작업을 닫을까요?"
                     } else {
-                        "이 Bash 세션과 실행 중인 프로그램을 종료할까요?"
+                        "이 탭과 작업을 닫을까요?"
                     });
+                    let button_width = (ui.available_width() - ui.spacing().item_spacing.x) * 0.5;
                     ui.horizontal(|ui| {
-                        if ui
-                            .add(IconButton::new(ActionIcon::Close, "취소").size(26.0))
-                            .clicked()
-                        {
+                        let cancel = ui.add_sized([button_width, 34.0], egui::Button::new("취소"));
+                        self.record_widget("close-cancel", cancel.rect);
+                        if cancel.clicked() {
                             self.quit_confirm = false;
                             self.close_confirm = None;
                         }
-                        if ui
-                            .add(
-                                IconButton::new(ActionIcon::Power, "종료 확인")
-                                    .size(26.0)
-                                    .danger(),
-                            )
-                            .clicked()
-                        {
+                        let confirm = ui.add_sized(
+                            [button_width, 34.0],
+                            egui::Button::new(if all { "모두 닫기" } else { "닫기" }),
+                        );
+                        self.record_widget("close-confirm", confirm.rect);
+                        if confirm.clicked() {
                             if self.quit_confirm {
                                 self.quit = true;
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             } else if let Some(index) = self.close_confirm.take() {
                                 if index < self.sessions.len() {
-                                    self.broker
-                                        .lock()
-                                        .unwrap_or_else(|p| p.into_inner())
-                                        .remove(&self.sessions[index].id);
-                                    self.sessions.remove(index);
-                                    self.selected =
-                                        self.selected.min(self.sessions.len().saturating_sub(1));
-                                    self.rows.clear();
+                                    self.remove_session(index);
                                 }
                             }
                         }
                     });
                 });
+            if let Some(dialog) = dialog {
+                self.record_widget("close-dialog", dialog.response.rect);
+            }
         }
     }
 }
@@ -2268,6 +3041,13 @@ impl eframe::App for MiniTerm {
 
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         let frame_start = Instant::now();
+        if let Some(deadline) = self.transparency_save_at {
+            if Instant::now() >= deadline {
+                self.save_quick_transparency();
+            } else {
+                ctx.request_repaint_after(deadline.saturating_duration_since(Instant::now()));
+            }
+        }
         if let Some(map) = &self.diagnostic_ui {
             map.lock().unwrap_or_else(|p| p.into_inner()).clear();
         }
@@ -2289,9 +3069,9 @@ impl eframe::App for MiniTerm {
                 }
                 Action::Settings => {
                     self.open_settings();
-                    native::show(self.hwnd, true);
                 }
                 Action::Quit => {
+                    self.close_settings();
                     self.expand(true);
                     self.quit_confirm = true;
                     native::show(self.hwnd, true);
@@ -2302,13 +3082,45 @@ impl eframe::App for MiniTerm {
                 }
                 Action::Activate(id) => self.activate_session(&id),
                 Action::Diagnostic(command) => match command.as_str() {
+                    "sample-scroll" => {
+                        if let Some(session) = self.sessions.get(self.selected) {
+                            // Fixed VT history for scroll/viewport testing. This does
+                            // not test or compensate for ConPTY keyboard delivery.
+                            let mut processor: alacritty_terminal::vte::ansi::Processor =
+                                alacritty_terminal::vte::ansi::Processor::new();
+                            let mut term = session.term.lock();
+                            processor.advance(&mut *term, b"\x1b[2J\x1b[3J\x1b[H");
+                            for line in 0..180 {
+                                processor.advance(
+                                    &mut *term,
+                                    format!("SCROLL-FIXTURE {line:03}\r\n").as_bytes(),
+                                );
+                            }
+                            session.revision.fetch_add(1, Ordering::Release);
+                            self.rows.clear();
+                        }
+                    }
+                    command if diagnostic_key(command).is_some() => {
+                        let event = diagnostic_key(command).unwrap();
+                        if self.settings_open {
+                            self.diagnostic_settings_keys.push(event);
+                        } else {
+                            ctx.input_mut(|input| input.events.push(event));
+                        }
+                    }
                     "hide" => self.hide(),
                     "expand" => self.expand(true),
                     "collapse" => self.expand(false),
                     "settings" => self.open_settings(),
                     "theme-light" => self.set_theme(ctx, "light"),
                     "theme-dark" => self.set_theme(ctx, "dark"),
-                    "settings-cancel" => self.close_settings(),
+                    "settings-close" | "settings-cancel" => self.close_settings(),
+                    "confirm-quit" => {
+                        self.close_settings();
+                        self.expand(true);
+                        self.quit_confirm = true;
+                        native::show(self.hwnd, true);
+                    }
                     "sample" => {
                         if let Some(session) = self.sessions.get(self.selected) {
                             self.diagnostic_sample_requested = true;
@@ -2384,6 +3196,50 @@ impl eframe::App for MiniTerm {
                     self.rows.clear();
                 }
                 Err(error) => self.error = Some(error),
+            }
+        }
+        for index in (0..self.sessions.len()).rev() {
+            if self.sessions[index].exited.load(Ordering::Acquire) {
+                let error = self.sessions[index]
+                    .error
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clone();
+                if error.is_some() {
+                    self.error = error;
+                }
+                self.remove_session(index);
+            }
+        }
+        if native::focused(self.hwnd)
+            && !self.composing
+            && !self.settings_open
+            && !self.notices_open
+            && !self.quit_confirm
+            && self.close_confirm.is_none()
+            && self.error.is_none()
+        {
+            let shortcuts = ctx.input_mut(take_hud_shortcuts);
+            if !shortcuts.is_empty() && self.shortcut_gate.claim(ctx.cumulative_frame_nr()) {
+                for shortcut in shortcuts {
+                    self.hud_shortcut(ctx, shortcut);
+                    if self.settings_open || self.close_confirm.is_some() {
+                        break;
+                    }
+                }
+            }
+        }
+        if !self.settings_open
+            && !self.quit_confirm
+            && self.close_confirm.is_none()
+            && self.error.is_none()
+        {
+            let next =
+                ctx.input_mut(|input| take_opacity_wheel(input, self.settings.window.transparency));
+            if let Some(next) = next {
+                if self.scroll_gate.claim(ctx.cumulative_frame_nr()) {
+                    self.quick_transparency(next, ctx);
+                }
             }
         }
         if let Some(id) = self.pending_activation.clone() {
@@ -2494,6 +3350,8 @@ impl eframe::App for MiniTerm {
             && self.expanded
             && self.settings.window.auto_collapse
             && !self.display_watch.moving()
+            && !self.opacity_open
+            && !self.settings_open
         {
             self.expand(false);
             self.close_settings();
@@ -2523,6 +3381,7 @@ impl eframe::App for MiniTerm {
                 .store(visible && index == self.selected, Ordering::Release);
         }
         if !visible {
+            self.settings_viewport(ctx);
             return;
         }
         if let Some(transition) = &self.transition {
@@ -2543,11 +3402,7 @@ impl eframe::App for MiniTerm {
         if self.error.is_some() && !self.expanded {
             self.expand(true);
         }
-        ctx.set_visuals(if self.settings.theme == "light" {
-            egui::Visuals::light()
-        } else {
-            egui::Visuals::dark()
-        });
+        ctx.set_visuals(hud_visuals(self.settings.theme == "light"));
         egui::TopBottomPanel::top("header")
             .exact_height(27.0)
             .frame(
@@ -2574,6 +3429,8 @@ impl eframe::App for MiniTerm {
             )
             .show(ctx, |ui| self.terminal(ui, ctx));
         self.dialogs(ctx);
+        self.settings_viewport(ctx);
+        self.opacity_popup(ctx);
         if let Err(error) = self
             .appearance
             .apply(&self.display_watch, &self.settings.window)
@@ -2620,8 +3477,175 @@ fn nonempty_path(value: &str) -> Option<PathBuf> {
     (!value.trim().is_empty()).then(|| value.trim().into())
 }
 
+fn selection_after_removal(selected: usize, removed: usize, remaining: usize) -> usize {
+    selected
+        .saturating_sub(usize::from(removed < selected))
+        .min(remaining.saturating_sub(1))
+}
+
+fn opacity_modifiers(modifiers: egui::Modifiers) -> bool {
+    modifiers.ctrl && modifiers.alt && !modifiers.shift
+}
+
+fn hud_key(key: Key, modifiers: egui::Modifiers) -> Option<HudShortcut> {
+    use HudShortcut::*;
+    // consume_key ignores extra Shift/Alt; match exactly to preserve shell/TUI
+    // chords such as Ctrl+W and Ctrl+Alt+Shift+W. Windows command duplicates Ctrl.
+    if !modifiers.ctrl || modifiers.mac_cmd {
+        return None;
+    }
+    match (modifiers.shift, modifiers.alt, key) {
+        (true, false, Key::T) => Some(NewTab),
+        (true, false, Key::W) => Some(CloseTab),
+        (false, false, Key::Tab) => Some(NextTab),
+        (true, false, Key::Tab) => Some(PreviousTab),
+        (false, true, Key::Num1) => Some(SelectTab(0)),
+        (false, true, Key::Num2) => Some(SelectTab(1)),
+        (false, true, Key::Num3) => Some(SelectTab(2)),
+        (false, true, Key::Num4) => Some(SelectTab(3)),
+        (false, false, Key::Comma) => Some(Settings),
+        (false, true, Key::Enter) => Some(ToggleExpanded),
+        (false, true, Key::M) => Some(ToggleMiniView),
+        (_, false, Key::Plus) | (false, false, Key::Equals) => Some(FontSize(1)),
+        (false, false, Key::Minus) => Some(FontSize(-1)),
+        (false, false, Key::Num0) => Some(FontSize(0)),
+        (true, false, Key::ArrowUp) => Some(ScrollLines(3)),
+        (true, false, Key::ArrowDown) => Some(ScrollLines(-3)),
+        (true, false, Key::PageUp) => Some(ScrollPage(true)),
+        (true, false, Key::PageDown) => Some(ScrollPage(false)),
+        (true, false, Key::Home) => Some(ScrollEnd(true)),
+        (true, false, Key::End) => Some(ScrollEnd(false)),
+        _ => None,
+    }
+}
+
+fn take_hud_shortcuts(input: &mut egui::InputState) -> Vec<HudShortcut> {
+    let mut shortcuts = Vec::new();
+    input.events.retain(|event| {
+        if let Event::Key {
+            key,
+            modifiers,
+            pressed,
+            repeat,
+            ..
+        } = event
+        {
+            if let Some(shortcut) = hud_key(*key, *modifiers) {
+                if *pressed
+                    && (!repeat
+                        || matches!(
+                            shortcut,
+                            HudShortcut::FontSize(_)
+                                | HudShortcut::ScrollLines(_)
+                                | HudShortcut::ScrollPage(_)
+                                | HudShortcut::ScrollEnd(_)
+                        ))
+                {
+                    shortcuts.push(shortcut);
+                }
+                return false;
+            }
+        }
+        true
+    });
+    shortcuts
+}
+
+// A small, namespaced GUI fixture surface. It inserts the same egui key events
+// consumed by the real selector, rather than directly invoking app actions.
+fn diagnostic_key(command: &str) -> Option<Event> {
+    let chord = command.strip_prefix("key:")?;
+    let mut parts = chord.split('+').collect::<Vec<_>>();
+    let key = Key::from_name(parts.pop()?)?;
+    let mut modifiers = egui::Modifiers::NONE;
+    for part in parts {
+        let flag = match part {
+            "ctrl" => &mut modifiers.ctrl,
+            "shift" => &mut modifiers.shift,
+            "alt" => &mut modifiers.alt,
+            _ => return None,
+        };
+        if *flag {
+            return None;
+        }
+        *flag = true;
+    }
+    modifiers.command = modifiers.ctrl;
+    let allowed = hud_key(key, modifiers).is_some()
+        || (key == Key::W && modifiers.ctrl && !modifiers.alt && !modifiers.shift)
+        || (matches!(key, Key::Enter | Key::Escape) && modifiers == egui::Modifiers::NONE);
+    allowed.then_some(Event::Key {
+        key,
+        physical_key: Some(key),
+        pressed: true,
+        repeat: false,
+        modifiers,
+    })
+}
+
+fn take_plain_escape(input: &mut egui::InputState) -> bool {
+    let mut pressed = false;
+    input.events.retain(|event| {
+        if let Event::Key {
+            key: Key::Escape,
+            modifiers,
+            pressed: down,
+            ..
+        } = event
+        {
+            if !modifiers.ctrl && !modifiers.alt && !modifiers.shift && !modifiers.mac_cmd {
+                pressed |= *down;
+                return false;
+            }
+        }
+        true
+    });
+    pressed
+}
+
+fn take_opacity_wheel(input: &mut egui::InputState, current: u16) -> Option<u16> {
+    if input.pointer.hover_pos().is_none()
+        || !opacity_modifiers(input.modifiers)
+        || input.raw_scroll_delta.y == 0.0
+    {
+        return None;
+    }
+    let next = (current as i32
+        + if input.raw_scroll_delta.y > 0.0 {
+            5
+        } else {
+            -5
+        })
+    .clamp(0, 80) as u16;
+    input.raw_scroll_delta = Vec2::ZERO;
+    input.smooth_scroll_delta = Vec2::ZERO;
+    input
+        .events
+        .retain(|event| !matches!(event, Event::MouseWheel { .. }));
+    Some(next)
+}
+
+fn alternate_wheel_bytes(
+    mode: TermMode,
+    shift: bool,
+    enabled: bool,
+    scroll: f32,
+) -> Option<Vec<u8>> {
+    if !enabled || shift || !mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
+        return None;
+    }
+    let key = if scroll > 0.0 {
+        Key::ArrowUp
+    } else {
+        Key::ArrowDown
+    };
+    Some(key_bytes(key, egui::Modifiers::NONE, mode)?.repeat(3))
+}
+
 impl Drop for MiniTerm {
     fn drop(&mut self) {
+        crate::codex_link::close_all();
+        self.save_quick_transparency();
         let Some(path) = std::env::var_os("MINITERM_METRICS_PATH").map(PathBuf::from) else {
             return;
         };
@@ -2671,14 +3695,24 @@ fn summary_label(
     tooltip_size: Vec2,
     role: &str,
 ) -> egui::Response {
-    ui.put(
-        rect,
-        egui::Label::new(text)
+    let mut elided = false;
+    let response = ui.put(rect, |ui: &mut egui::Ui| {
+        let (pos, galley, response) = egui::Label::new(text)
             .truncate()
             .show_tooltip_when_elided(false)
-            .selectable(false),
-    )
-    .on_hover_ui(|ui| {
+            .selectable(false)
+            .layout_in_ui(ui);
+        elided = galley.elided;
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), galley.text())
+        });
+        ui.painter().galley(pos, galley, ui.visuals().text_color());
+        response
+    });
+    if !elided || hint.trim().is_empty() {
+        return response;
+    }
+    response.on_hover_ui(|ui| {
         ui.set_max_width(tooltip_size.x);
         egui::ScrollArea::vertical()
             .id_salt(role)
@@ -2729,11 +3763,9 @@ static SYSTEM_FONTS: LazyLock<BTreeMap<&'static str, Arc<FontData>>> = LazyLock:
     ]
     .into_iter()
     .filter_map(|file| {
-        let bytes = std::fs::read(root.join(file)).ok()?;
-        // Exactly seven fixed OS faces are process-lifetime assets. Borrowed
-        // bytes let egui use FontRef instead of cloning each large TTF to FontVec.
-        // Custom font paths stay owned and are released when the UI replaces them.
-        let bytes = Box::leak(bytes.into_boxed_slice());
+        // Fixed OS faces share read-only file-backed pages. User-selected fonts
+        // below stay owned so replacing a custom font releases its storage.
+        let bytes = crate::font_store::system_face(&root.join(file))?;
         Some((file, Arc::new(FontData::from_static(bytes))))
     })
     .collect()
@@ -2758,13 +3790,18 @@ fn install_fonts(ctx: &Context, custom: &str) {
     }
     if let Some(data) = SYSTEM_FONTS.get("malgun.ttf") {
         fonts.font_data.insert("hangul".into(), data.clone());
-        for family in [FontFamily::Monospace, FontFamily::Proportional] {
-            fonts
-                .families
-                .entry(family)
-                .or_default()
-                .push("hangul".into());
-        }
+        fonts
+            .families
+            .entry(FontFamily::Monospace)
+            .or_default()
+            .push("hangul".into());
+        // One system UI face supplies both Latin and Hangul metrics. Keep the
+        // selected terminal font and its Hangul fallback in the mono family.
+        fonts
+            .families
+            .entry(FontFamily::Proportional)
+            .or_default()
+            .insert(0, "hangul".into());
     }
     // Consolas and Malgun omit U+275A (AI Battery's bar) and other TUI symbols.
     // Use the OS symbol face as a fallback without changing the selected text font.
@@ -2812,6 +3849,123 @@ fn background(light: bool) -> Color32 {
     } else {
         Color32::from_rgb(17, 21, 29)
     }
+}
+
+fn hud_visuals(light: bool) -> egui::Visuals {
+    let mut visuals = if light {
+        egui::Visuals::light()
+    } else {
+        egui::Visuals::dark()
+    };
+    let color = |index| {
+        let color = crate::palette::rgb(index, light);
+        Color32::from_rgb(color.r, color.g, color.b)
+    };
+    let surface = if light {
+        Color32::from_rgb(228, 233, 238)
+    } else {
+        Color32::from_rgb(24, 31, 42)
+    };
+    let border = if light {
+        Color32::from_rgb(198, 207, 219)
+    } else {
+        Color32::from_rgb(48, 62, 80)
+    };
+    let hover = if light {
+        Color32::from_rgb(215, 228, 231)
+    } else {
+        Color32::from_rgb(34, 48, 59)
+    };
+    visuals.panel_fill = background(light);
+    visuals.window_fill = background(light);
+    visuals.window_stroke = Stroke::new(1.0, border);
+    visuals.extreme_bg_color = if light {
+        Color32::WHITE
+    } else {
+        Color32::from_rgb(13, 17, 25)
+    };
+    visuals.faint_bg_color = surface;
+    visuals.override_text_color = Some(color(256));
+    visuals.selection.bg_fill = color(6).gamma_multiply(0.18);
+    visuals.selection.stroke = Stroke::new(1.0, color(6));
+    for widgets in [
+        &mut visuals.widgets.noninteractive,
+        &mut visuals.widgets.inactive,
+    ] {
+        widgets.bg_fill = surface;
+        widgets.weak_bg_fill = surface;
+        widgets.bg_stroke = Stroke::new(1.0, border);
+        widgets.fg_stroke = Stroke::new(1.0, color(256));
+        widgets.corner_radius = egui::CornerRadius::same(6);
+    }
+    for widgets in [
+        &mut visuals.widgets.hovered,
+        &mut visuals.widgets.active,
+        &mut visuals.widgets.open,
+    ] {
+        widgets.bg_fill = hover;
+        widgets.weak_bg_fill = hover;
+        widgets.bg_stroke = Stroke::new(1.0, color(6));
+        widgets.fg_stroke = Stroke::new(1.0, color(256));
+        widgets.corner_radius = egui::CornerRadius::same(6);
+    }
+    visuals
+}
+
+fn settings_style(ui: &mut egui::Ui) {
+    let width = ui.available_width();
+    let style = ui.style_mut();
+    style.spacing.item_spacing = Vec2::new(12.0, 10.0);
+    style.spacing.interact_size.y = 28.0;
+    style.spacing.button_padding = Vec2::new(10.0, 6.0);
+    style.spacing.slider_width = (width - 120.0).clamp(80.0, 180.0);
+    style.spacing.text_edit_width = (width - 8.0).clamp(80.0, 300.0);
+    for (text_style, size) in [
+        (egui::TextStyle::Body, 14.0),
+        (egui::TextStyle::Button, 14.0),
+        (egui::TextStyle::Monospace, 14.0),
+        (egui::TextStyle::Small, 12.0),
+        (egui::TextStyle::Heading, 16.0),
+    ] {
+        style.text_styles.insert(
+            text_style.clone(),
+            FontId::new(
+                size,
+                if text_style == egui::TextStyle::Monospace {
+                    FontFamily::Monospace
+                } else {
+                    FontFamily::Proportional
+                },
+            ),
+        );
+    }
+}
+
+fn settings_section(ui: &mut egui::Ui, title: &str, description: &str) {
+    ui.add_space(12.0);
+    ui.label(
+        egui::RichText::new(title)
+            .size(16.0)
+            .strong()
+            .color(ui.visuals().selection.stroke.color),
+    );
+    ui.label(egui::RichText::new(description).weak());
+    ui.add_space(2.0);
+}
+
+fn window_placement_changed(
+    a: &crate::geometry::WindowPreferences,
+    b: &crate::geometry::WindowPreferences,
+) -> bool {
+    a.monitor != b.monitor
+        || a.anchor != b.anchor
+        || a.right != b.right
+        || a.bottom != b.bottom
+        || a.mini_width != b.mini_width
+        || a.mini_height != b.mini_height
+        || a.expanded_width_percent != b.expanded_width_percent
+        || a.expanded_height_percent != b.expanded_height_percent
+        || a.expanded_height != b.expanded_height
 }
 
 fn resolve_color(
@@ -2963,20 +4117,7 @@ fn send_mouse(
 }
 
 fn tray_icon() -> Icon {
-    let mut rgba = vec![0u8; 32 * 32 * 4];
-    for y in 0..32 {
-        for x in 0..32 {
-            let on = ((7..=14).contains(&x) && ((y as i32 - 16).abs() - (x as i32 - 7)).abs() <= 1)
-                || ((18..=26).contains(&x) && (22..=24).contains(&y));
-            let pixel = (y * 32 + x) * 4;
-            rgba[pixel..pixel + 4].copy_from_slice(if on {
-                &[106, 218, 187, 255]
-            } else {
-                &[17, 21, 29, 255]
-            });
-        }
-    }
-    Icon::from_rgba(rgba, 32, 32).expect("valid embedded icon")
+    Icon::from_rgba(crate::brand::rgba(32), 32, 32).expect("valid embedded icon")
 }
 
 pub fn run() -> eframe::Result {
@@ -2984,6 +4125,7 @@ pub fn run() -> eframe::Result {
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("MiniTerm")
+            .with_icon(crate::brand::window_icon())
             .with_inner_size([560.0, 112.0])
             .with_decorations(false)
             .with_resizable(true)
@@ -3021,6 +4163,277 @@ pub fn run() -> eframe::Result {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn visible_summary_does_not_repeat_its_text_in_a_tooltip() {
+        let ctx = Context::default();
+        ctx.style_mut(|style| style.interaction.tooltip_delay = 0.0);
+        let rect = Rect::from_min_size(Pos2::new(12.0, 12.0), Vec2::new(480.0, 20.0));
+        for frame in 0..6 {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(520.0, 180.0))),
+                    time: Some(frame as f64 * 0.2),
+                    events: vec![Event::PointerMoved(rect.center())],
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        summary_label(
+                            ui,
+                            rect,
+                            egui::RichText::new("작업 계획 없음"),
+                            "작업 계획 없음",
+                            Vec2::new(280.0, 70.0),
+                            "summary-unreported",
+                        );
+                    });
+                },
+            );
+        }
+        assert_eq!(
+            ctx.memory(|memory| memory
+                .areas()
+                .visible_layer_ids()
+                .iter()
+                .filter(|layer| layer.order == egui::Order::Tooltip)
+                .count()),
+            0
+        );
+    }
+    #[test]
+    fn terminal_management_chords_do_not_consume_shell_keys_or_extra_modifiers() {
+        use egui::Modifiers as M;
+        let ctx = Context::default();
+        let key_event = |key, modifiers| Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        let mut events = Vec::new();
+        for (key, modifiers) in [
+            (Key::W, M::CTRL),
+            (Key::W, M::CTRL | M::SHIFT),
+            (Key::Tab, M::CTRL),
+            (Key::Tab, M::CTRL | M::SHIFT),
+            (Key::Num4, M::CTRL | M::ALT),
+            (Key::Comma, M::CTRL),
+            (Key::W, M::CTRL | M::SHIFT | M::ALT),
+            (Key::T, M::ALT),
+        ] {
+            events.push(key_event(key, modifiers));
+            events.push(Event::Key {
+                key,
+                physical_key: Some(key),
+                pressed: false,
+                repeat: false,
+                modifiers,
+            });
+        }
+        events.extend([Event::Copy, Event::Paste("한글 paste".into())]);
+        let _ = ctx.run(
+            egui::RawInput {
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                assert_eq!(
+                    ctx.input_mut(take_hud_shortcuts),
+                    vec![
+                        HudShortcut::CloseTab,
+                        HudShortcut::NextTab,
+                        HudShortcut::PreviousTab,
+                        HudShortcut::SelectTab(3),
+                        HudShortcut::Settings,
+                    ]
+                );
+                ctx.input(|input| {
+                    let remaining_keys = input
+                        .events
+                        .iter()
+                        .filter_map(|event| {
+                            if let Event::Key {
+                                key,
+                                modifiers,
+                                pressed: true,
+                                ..
+                            } = event
+                            {
+                                Some((*key, *modifiers))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        remaining_keys,
+                        vec![
+                            (Key::W, M::CTRL),
+                            (Key::W, M::CTRL | M::SHIFT | M::ALT),
+                            (Key::T, M::ALT),
+                        ]
+                    );
+                    assert!(input
+                        .events
+                        .iter()
+                        .any(|event| matches!(event, Event::Copy)));
+                    assert!(input
+                        .events
+                        .iter()
+                        .any(|event| matches!(event, Event::Paste(_))));
+                });
+            },
+        );
+        assert_eq!(
+            key_bytes(Key::W, M::CTRL, TermMode::empty()),
+            Some(vec![23])
+        );
+    }
+
+    #[test]
+    fn escape_cancellation_is_consumed_without_changing_modified_shell_escape() {
+        let ctx = Context::default();
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![
+                    Event::Key {
+                        key: Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                    Event::Key {
+                        key: Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::ALT,
+                    },
+                ],
+                ..Default::default()
+            },
+            |ctx| {
+                assert!(ctx.input_mut(take_plain_escape));
+                assert!(!ctx.input_mut(take_plain_escape));
+                assert!(ctx
+                    .input(|input| input.events.iter().any(
+                        |event| matches!(event, Event::Key { modifiers, .. } if modifiers.alt)
+                    )));
+            },
+        );
+    }
+
+    #[test]
+    fn hud_shortcuts_consume_their_events_before_terminal_input() {
+        let ctx = Context::default();
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![
+                    Event::Key {
+                        key: Key::T,
+                        physical_key: Some(Key::T),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::CTRL
+                            | egui::Modifiers::SHIFT
+                            | egui::Modifiers::COMMAND,
+                    },
+                    Event::Text("x".into()),
+                ],
+                ..Default::default()
+            },
+            |ctx| {
+                assert_eq!(ctx.input_mut(take_hud_shortcuts), vec![HudShortcut::NewTab]);
+                assert!(ctx.input_mut(take_hud_shortcuts).is_empty());
+                let forwarded: Vec<_> = ctx.input(|input| {
+                    input
+                        .events
+                        .iter()
+                        .filter_map(|event| match event {
+                            Event::Key {
+                                key,
+                                pressed: true,
+                                modifiers,
+                                ..
+                            } => key_bytes(*key, *modifiers, TermMode::empty()),
+                            Event::Text(text) => Some(text.as_bytes().to_vec()),
+                            _ => None,
+                        })
+                        .flatten()
+                        .collect()
+                });
+                assert_eq!(
+                    forwarded, b"x",
+                    "Ctrl+T must not reach Bash when opening a tab"
+                );
+            },
+        );
+        for (modifiers, initial, expected) in [
+            (egui::Modifiers::CTRL | egui::Modifiers::ALT, 78, Some(80)),
+            (egui::Modifiers::NONE, 78, None),
+        ] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    modifiers,
+                    events: vec![
+                        Event::PointerMoved(Pos2::new(40.0, 40.0)),
+                        Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Line,
+                            delta: Vec2::new(0.0, 1.0),
+                            modifiers,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ctx| {
+                    assert_eq!(
+                        ctx.input_mut(|input| take_opacity_wheel(input, initial)),
+                        expected
+                    );
+                    assert_eq!(
+                        ctx.input(|input| input
+                            .events
+                            .iter()
+                            .any(|event| matches!(event, Event::MouseWheel { .. }))),
+                        expected.is_none(),
+                        "Opacity adjustment must not also scroll the terminal"
+                    );
+                },
+            );
+        }
+    }
+    #[test]
+    fn wheel_does_not_edit_codex_history_and_opt_in_respects_dec_modes() {
+        let fullscreen = TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
+        assert_eq!(alternate_wheel_bytes(fullscreen, false, false, 40.0), None);
+        assert_eq!(alternate_wheel_bytes(fullscreen, true, true, 40.0), None);
+        assert_eq!(
+            alternate_wheel_bytes(TermMode::ALT_SCREEN, false, true, 40.0),
+            None
+        );
+        assert_eq!(
+            alternate_wheel_bytes(TermMode::ALTERNATE_SCROLL, false, true, 40.0),
+            None
+        );
+        assert_eq!(
+            alternate_wheel_bytes(fullscreen, false, true, 40.0).unwrap(),
+            b"\x1b[A\x1b[A\x1b[A"
+        );
+        assert_eq!(
+            alternate_wheel_bytes(fullscreen | TermMode::APP_CURSOR, false, true, -40.0).unwrap(),
+            b"\x1bOB\x1bOB\x1bOB"
+        );
+    }
+
+    #[test]
+    fn closing_a_tab_preserves_the_active_session_or_selects_a_neighbor() {
+        assert_eq!(selection_after_removal(2, 0, 3), 1);
+        assert_eq!(selection_after_removal(1, 1, 3), 1);
+        assert_eq!(selection_after_removal(3, 3, 3), 2);
+        assert_eq!(selection_after_removal(0, 0, 0), 0);
+    }
     #[test]
     fn elided_summary_has_one_tooltip_with_the_complete_work_label() {
         let ctx = Context::default();

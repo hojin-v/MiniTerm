@@ -50,7 +50,7 @@ Rust 네이티브 UI와 DX12 렌더링, ConPTY를 사용합니다. 앱 실행에
 
 ## Install
 
-WinGet 공식 카탈로그 등록용 [PR #450836](https://github.com/microsoft/winget-pkgs/pull/450836)을 `Hnode.MiniTerm 0.1.0-alpha.3`으로 갱신하고 검토 가능한 일반 PR로 전환했습니다. 새 버전의 자동 검증·Microsoft 검토·병합과 카탈로그 반영이 완료되면 다음 명령으로 설치할 수 있습니다. **현재는 등록 전이므로 일반 WinGet 검색·설치를 사용할 수 없습니다.** [등록 상태와 절차](docs/WINGET.md)를 확인하세요.
+WinGet 공식 카탈로그 등록용 [PR #450836](https://github.com/microsoft/winget-pkgs/pull/450836)을 `Hnode.MiniTerm 0.1.0-alpha.6`으로 갱신하고 검토 가능한 일반 PR로 전환했습니다. 새 버전의 자동 검증·Microsoft 검토·병합과 카탈로그 반영이 완료되면 다음 명령으로 설치할 수 있습니다. **현재는 등록 전이므로 일반 WinGet 검색·설치를 사용할 수 없습니다.** [등록 상태와 절차](docs/WINGET.md)를 확인하세요.
 
 ```powershell
 winget install miniterm
@@ -58,12 +58,12 @@ winget install miniterm
 
 등록 후 `winget install MiniTerm`은 같은 이름으로, `winget install hnode.miniterm`은 패키지 ID로 검색합니다. 기본 검색은 대소문자를 구분하지 않습니다.
 
-[GitHub Releases](https://github.com/hojin-v/MiniTerm/releases/tag/v0.1.0-alpha.6)에서 수정본 `v0.1.0-alpha.6`의 설치본과 ZIP을 받을 수 있습니다.
+[GitHub Releases](https://github.com/hojin-v/MiniTerm/releases/tag/v0.1.0-alpha.7)에서 수정본 `v0.1.0-alpha.7`의 설치본과 ZIP을 받을 수 있습니다.
 
 | Download | Use |
 | --- | --- |
-| `MiniTerm-0.1.0-alpha.6-windows-x64-setup.exe` | 권장 사용자별 설치. 관리자 권한 불필요 |
-| `MiniTerm-0.1.0-alpha.6-windows-x64.zip` | 압축을 풀고 `miniterm.exe` 실행. 설치·알림 등록은 자동 수행하지 않음 |
+| `MiniTerm-0.1.0-alpha.7-windows-x64-setup.exe` | 권장 사용자별 설치. 관리자 권한 불필요 |
+| `MiniTerm-0.1.0-alpha.7-windows-x64.zip` | 압축을 풀고 `miniterm.exe` 실행. 설치·알림 등록은 자동 수행하지 않음 |
 | `SHA256SUMS` | 다운로드 파일의 무결성 확인 |
 
 Git for Windows와 [Microsoft Visual C++ v14 x64 런타임](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)을 별도로 준비해야 합니다. 실행 파일에서 `VCRUNTIME140.dll` 의존성을 확인했습니다. 설치본은 서명되지 않았으며 Windows에서 게시자를 확인할 수 없다는 안내가 나올 수 있습니다. 백신을 끄거나 경고를 일괄 우회하는 방식은 안내하지 않습니다.
@@ -94,10 +94,11 @@ Git for Windows와 [Microsoft Visual C++ v14 x64 런타임](https://learn.micros
 | 입력 / 요약 전환 | 화면 구성 아이콘 |
 | 숨기기 / 다시 열기 | 숨기기 아이콘 / 트레이 클릭 |
 | 복사 / 붙여넣기 | `Ctrl+Shift+C` / `Ctrl+V` 또는 `Ctrl+Shift+V` |
+| 스크롤 | 마우스 휠 (기본 스크롤백) / `Shift` + 휠 (대체 화면 TUI 강제 스크롤) |
 | 설정 / 종료 | 트레이 메뉴 |
 | 열기 단축키 | 기본 `Ctrl+Alt+Space`, 실기 검증 진행 중 |
 
-숨기기는 실행을 유지합니다. 앱 종료나 설치·업데이트 전에 진행 중인 셸 작업을 마치세요. 세션 번호를 오른쪽 클릭하면 해당 세션의 종료 확인을 표시합니다.
+숨기기는 실행을 유지합니다. 앱 종료나 설치·업데이트 전에 진행 중인 셸 작업을 마치세요. 세션 번호를 오른쪽 클릭하면 해당 세션의 종료 확인을 표시합니다. TUI 프로그램(예: Codex) 실행 시 마우스 휠 동작 차이와 해결 방법은 [스크롤 동작 안내](docs/SCROLL_BEHAVIOR.md)를 참고하세요.
 
 ## Task Summary
 
@@ -111,14 +112,16 @@ Git for Windows와 [Microsoft Visual C++ v14 x64 런타임](https://learn.micros
 
 [AI Battery](https://github.com/hojin-v/ai-battery)를 별도로 설정한 환경에서는 해당 도구의 사용량 행을 유지합니다. MiniTerm 자체가 사용량을 추정하거나 AI Battery를 함께 설치하지는 않습니다. 설치·설정 방법은 AI Battery의 안내를 따릅니다.
 
-Codex·Claude Code 알림 연결은 설정에서 선택합니다. 새로 시작하는 CLI에 적용되며 기존 설정과 콜백을 보존합니다. 현재 검증은 별도 CLI·로컬 응답·helper·IPC 전달까지이며 실제 Windows 알림 클릭과 실제 계정 응답의 전체 경로는 추가 시험이 필요합니다. [알림 안내](docs/NOTIFICATIONS.md)를 확인하세요.
+설정의 Codex 탭에서 Windows Codex의 기본 실행 도구를 Git Bash로 연결할 수 있습니다. 일반 실행은 공유 서버를 먼저 준비한 뒤 같은 대화를 이어갑니다. 이 등록은 MiniTerm 밖의 Windows Codex에도 적용됩니다. [실행 방식과 범위](feature/CODEX_STARTUP.md)를 확인하세요.
+
+Codex·Claude Code 알림 연결은 설정에서 선택하며 기존 콜백을 보존합니다. 공유 Codex는 각 탭의 성공한 대화 연결을 통해 응답 완료·입력 요청을 알립니다. 자체 제공자를 사용한 두 탭 GUI 검사와 단독 실행/Claude 훅 전달을 검증했으며, 실제 Windows 팝업 클릭과 실제 계정 응답 확인은 남아 있습니다. [알림 안내와 적용 범위](docs/NOTIFICATIONS.md)를 확인하세요.
 
 ## Known Issues
 
 | Issue | Current status |
 | --- | --- |
 | 리사이즈 직후 입력 누락 | 기본 Git Bash의 첫 글자 누락이 재현됨. 격리 MSYS v3 패치는 입력·신호 검사를 통과했으나 배포 미포함 |
-| 메모리 목표 | 일부 샘플이 200MB 목표를 초과. 전체 성능 통과로 표시하지 않음 |
+| 메모리 목표 | 로컬 30초 유휴 1/4세션 최대 150.1/152.9MB. 공개 CI 파일·다른 장치·전체 성능 판정은 별도 |
 | 실제 입력·알림 | 한글 IME 조합·후보창, 실제 단축키와 알림 클릭 검증이 남음 |
 | 성능·호환성 | 출력 부하·입력→화면 지연·혼합 DPI·다른 장치·깨끗한 설치 환경 검증이 남음 |
 | 에이전트 요약 | 실제 모델의 지속적인 skill 선택·진행 보고는 별도 검증 대상 |
@@ -160,12 +163,12 @@ cd MiniTerm
 ./scripts/cargo.ps1 -CargoArguments @('fmt','--all','--','--check')
 ./scripts/cargo.ps1 -CargoArguments @('clippy','--locked','--all-targets','--','-D','warnings')
 ./scripts/build.ps1
-./scripts/package.ps1 -SkipBuild -ReleaseTag v0.1.0-alpha.6
+./scripts/package.ps1 -SkipBuild -ReleaseTag v0.1.0-alpha.7
 ```
 
 Rust가 없으면 `./scripts/bootstrap-rust.ps1`로 프로젝트 `.tools`에 설치할 수 있습니다. `./scripts/test.ps1 -Pty`는 실제 Git Bash 호환성을 검사하며 현재 알려진 리사이즈 문제가 재현될 수 있습니다. GitHub CI는 이 결과를 별도 기록하고 알파의 한계를 공개합니다.
 
-배포 파일은 `artifacts/`에 생성하며 Git에 커밋하지 않습니다. [배포 절차](docs/DISTRIBUTION.md), [성능 설계](docs/PERFORMANCE.md), [구현 기록](docs/IMPLEMENTATION.md)을 참고하세요.
+배포 파일은 `artifacts/`에 생성하며 Git에 커밋하지 않습니다. 개발 세션을 이어받을 때는 [세션 인계 기준](docs/SESSION_HANDOFF.md)부터 확인하세요. [배포 절차](docs/DISTRIBUTION.md), [성능 설계](docs/PERFORMANCE.md), [구현 기록](docs/IMPLEMENTATION.md)을 참고하세요.
 
 ## License
 

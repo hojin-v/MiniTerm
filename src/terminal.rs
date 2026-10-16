@@ -3,7 +3,7 @@ use alacritty_terminal::{
     event::{Event, EventListener, WindowSize},
     grid::Dimensions,
     sync::FairMutex,
-    term::{Config, Osc52, Term},
+    term::Term,
     vte::ansi::Processor,
 };
 use egui::Context;
@@ -20,33 +20,123 @@ use uuid::Uuid;
 
 const INPUT_BUDGET: usize = 1024 * 1024;
 const READ_CHUNK: usize = 16 * 1024;
+const REPLY_BUDGET: usize = 64 * 1024;
+const REPLY_BURST: f64 = 256.0 * 1024.0;
+const REPLY_PER_SECOND: f64 = 128.0 * 1024.0;
+
+struct ReplyRate {
+    available: f64,
+    updated: Instant,
+}
+impl Default for ReplyRate {
+    fn default() -> Self {
+        Self {
+            available: REPLY_BURST,
+            updated: Instant::now(),
+        }
+    }
+}
+impl ReplyRate {
+    fn admit(&mut self, bytes: usize, now: Instant) -> bool {
+        self.available = (self.available
+            + now.saturating_duration_since(self.updated).as_secs_f64() * REPLY_PER_SECOND)
+            .min(REPLY_BURST);
+        self.updated = now;
+        if bytes as f64 > self.available {
+            false
+        } else {
+            self.available -= bytes as f64;
+            true
+        }
+    }
+}
 
 enum PtyCommand {
     Write(Vec<u8>),
     Resize(u16, u16),
+    Shutdown,
 }
 
 #[derive(Clone)]
 pub struct Input {
     sender: SyncSender<PtyCommand>,
     queued: Arc<AtomicUsize>,
+    win32: Arc<AtomicBool>,
+    workers: Arc<crate::io_workers::Workers>,
+    closed: Arc<AtomicBool>,
 }
 impl Input {
+    pub fn win32_mode(&self) -> bool {
+        self.win32.load(Ordering::Acquire)
+    }
     pub fn send(&self, data: Vec<u8>) -> Result<(), String> {
+        self.enqueue(data, false)
+    }
+
+    fn enqueue(&self, data: Vec<u8>, reply: bool) -> Result<(), String> {
         let count = data.len();
-        if count > INPUT_BUDGET {
+        let limit = INPUT_BUDGET + if reply { REPLY_BUDGET } else { 0 };
+        if self.closed.load(Ordering::Acquire) || self.workers.stopped() {
+            return Err("터미널 입력 연결이 닫혔습니다.".into());
+        }
+        if count > limit {
             return Err("붙여넣기는 1MB 이하로 나누어 주세요.".into());
         }
         self.queued
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
-                (queued + count <= INPUT_BUDGET).then_some(queued + count)
+                (queued.saturating_add(count) <= limit).then_some(queued.saturating_add(count))
             })
             .map_err(|_| "입력 큐가 가득 찼습니다.")?;
-        if self.sender.try_send(PtyCommand::Write(data)).is_err() {
-            self.queued.fetch_sub(count, Ordering::AcqRel);
+        let command = PtyCommand::Write(data);
+        let sent = if reply {
+            // Only the parser uses blocking backpressure, after releasing the VT lock.
+            self.sender.send(command).is_ok()
+        } else {
+            self.sender.try_send(command).is_ok()
+        };
+        if !sent {
+            self.release(count);
             return Err("입력 연결이 닫혔거나 큐가 가득 찼습니다.".into());
         }
         Ok(())
+    }
+
+    fn release(&self, count: usize) {
+        let _ = self
+            .queued
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                Some(n.saturating_sub(count))
+            });
+    }
+}
+
+struct Transport {
+    input: Input,
+    console: crate::console_guard::ConsoleHost,
+    job: Arc<crate::native::ProcessJob>,
+    error: Arc<Mutex<Option<String>>>,
+    ctx: Context,
+}
+impl Transport {
+    fn finish_input(&self) {
+        self.input.closed.store(true, Ordering::Release);
+        self.job.terminate();
+        let _ = self.input.sender.try_send(PtyCommand::Shutdown);
+    }
+    fn stop(&self, error: Option<String>) {
+        if !self.input.workers.stop() {
+            return;
+        }
+        self.input.closed.store(true, Ordering::Release);
+        if let Some(error) = error {
+            *self.error.lock().unwrap_or_else(|p| p.into_inner()) = Some(error);
+        }
+        self.input.queued.store(0, Ordering::Release);
+        self.job.terminate();
+        self.console.terminate();
+        // Wake an idle writer; a full queue also wakes it and the stop flag wins.
+        let _ = self.input.sender.try_send(PtyCommand::Shutdown);
+        self.ctx.request_repaint();
     }
 }
 
@@ -60,12 +150,56 @@ pub struct EventProxy {
     dimensions: Arc<Mutex<WindowSize>>,
     light: Arc<AtomicBool>,
     color_requests: ColorRequests,
+    replies: Arc<Mutex<Vec<u8>>>,
+    reply_overflow: Arc<AtomicBool>,
+    reply_rate: Arc<Mutex<ReplyRate>>,
+}
+impl EventProxy {
+    fn reply(&self, text: String) {
+        let mut replies = self.replies.lock().unwrap_or_else(|p| p.into_inner());
+        if replies.len().saturating_add(text.len()) <= REPLY_BUDGET {
+            replies.extend_from_slice(text.as_bytes());
+        } else {
+            self.reply_overflow.store(true, Ordering::Release);
+        }
+    }
+    fn flush_replies(&self) -> Result<(), String> {
+        if self.input.closed.load(Ordering::Acquire) {
+            self.replies
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clear();
+            return Ok(());
+        }
+        if self.reply_overflow.swap(false, Ordering::AcqRel) {
+            self.replies
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clear();
+            return Err("터미널의 자동 응답이 안전 한도를 초과해 세션을 중단했습니다.".into());
+        }
+        let replies = std::mem::take(&mut *self.replies.lock().unwrap_or_else(|p| p.into_inner()));
+        if !replies.is_empty()
+            && !self
+                .reply_rate
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .admit(replies.len(), Instant::now())
+        {
+            return Err("터미널 자동 응답이 반복돼 해당 세션을 중단했습니다.".into());
+        }
+        if replies.is_empty() {
+            Ok(())
+        } else {
+            self.input.enqueue(replies, true)
+        }
+    }
 }
 impl EventListener for EventProxy {
     fn send_event(&self, event: Event) {
         match event {
             Event::PtyWrite(text) => {
-                let _ = self.input.send(text.into_bytes());
+                self.reply(text);
             }
             Event::Title(title) => {
                 *self.title.lock().unwrap_or_else(|p| p.into_inner()) = title
@@ -79,13 +213,18 @@ impl EventListener for EventProxy {
             }
             Event::TextAreaSizeRequest(format) => {
                 let size = *self.dimensions.lock().unwrap_or_else(|p| p.into_inner());
-                let _ = self.input.send(format(size).into_bytes());
+                self.reply(format(size));
             }
             Event::ColorRequest(index, format) => {
-                self.color_requests
+                let mut requests = self
+                    .color_requests
                     .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .push((index, format));
+                    .unwrap_or_else(|p| p.into_inner());
+                if requests.len() < REPLY_BUDGET / 32 {
+                    requests.push((index, format));
+                } else {
+                    self.reply_overflow.store(true, Ordering::Release);
+                }
             }
             _ => {}
         }
@@ -116,7 +255,7 @@ fn reply_to_color_requests(term: &Term<EventProxy>, proxy: &EventProxy) {
     for (index, format) in requests {
         let rgb = term.colors()[index]
             .unwrap_or_else(|| crate::palette::rgb(index, proxy.light.load(Ordering::Acquire)));
-        let _ = proxy.input.send(format(rgb).into_bytes());
+        proxy.reply(format(rgb));
     }
 }
 
@@ -127,6 +266,7 @@ struct OutputParser {
     repaint_pending: Arc<AtomicBool>,
     visible: Arc<AtomicBool>,
     ctx: Context,
+    transport: Option<Arc<Transport>>,
 }
 
 impl OutputParser {
@@ -139,16 +279,19 @@ impl OutputParser {
         }
     }
 
-    fn finish_sync(&self, processor: &mut Processor) {
+    fn finish_sync(&self, processor: &mut Processor) -> Result<(), String> {
         let mut term = self.term.lock();
         processor.stop_sync(&mut *term);
         reply_to_color_requests(&term, &self.proxy);
         drop(term);
+        self.proxy.flush_replies()?;
         self.repaint();
+        Ok(())
     }
 
     fn run(self, output: Receiver<Vec<u8>>) {
         let mut processor: Processor = Processor::new();
+        let mut input_mode = crate::win32_input::Decoder::default();
         loop {
             // Wait indefinitely while idle, and use the VT core's deadline only
             // during a synchronized frame. Blocking pipe reads cannot expire it.
@@ -156,7 +299,12 @@ impl OutputParser {
                 Some(deadline) => {
                     let remaining = deadline.saturating_duration_since(Instant::now());
                     if remaining.is_zero() {
-                        self.finish_sync(&mut processor);
+                        if let Err(error) = self.finish_sync(&mut processor) {
+                            if let Some(transport) = &self.transport {
+                                transport.stop(Some(error));
+                            }
+                            break;
+                        }
                         continue;
                     }
                     output.recv_timeout(remaining)
@@ -165,15 +313,33 @@ impl OutputParser {
             };
             match received {
                 Ok(bytes) => {
+                    input_mode.advance(&bytes);
+                    self.proxy
+                        .input
+                        .win32
+                        .store(input_mode.active, Ordering::Release);
                     parse_output(&mut processor, &mut self.term.lock(), &self.proxy, &bytes);
+                    if let Err(error) = self.proxy.flush_replies() {
+                        if let Some(transport) = &self.transport {
+                            transport.stop(Some(error));
+                        }
+                        break;
+                    }
                     if processor.sync_bytes_count() < bytes.len() {
                         self.repaint();
                     }
                 }
-                Err(RecvTimeoutError::Timeout) => self.finish_sync(&mut processor),
+                Err(RecvTimeoutError::Timeout) => {
+                    if let Err(error) = self.finish_sync(&mut processor) {
+                        if let Some(transport) = &self.transport {
+                            transport.stop(Some(error));
+                        }
+                        break;
+                    }
+                }
                 Err(RecvTimeoutError::Disconnected) => {
                     if processor.sync_timeout().sync_timeout().is_some() {
-                        self.finish_sync(&mut processor);
+                        let _ = self.finish_sync(&mut processor);
                     }
                     break;
                 }
@@ -214,7 +380,7 @@ pub struct Session {
     pub error: Arc<Mutex<Option<String>>>,
     summary_cache: Mutex<(u64, crate::mini::Summary)>,
     dimensions: Arc<Mutex<WindowSize>>,
-    job: crate::native::ProcessJob,
+    transport: Arc<Transport>,
     prompt_files: crate::prompt::PromptFiles,
 }
 
@@ -250,6 +416,7 @@ impl Session {
             prompt_files.install_windows_bridge()?;
         }
         let pty::OpenPty {
+            console,
             master,
             mut reader,
             mut writer,
@@ -262,6 +429,9 @@ impl Session {
         let input = Input {
             sender: tx,
             queued: queued.clone(),
+            win32: Arc::new(AtomicBool::new(false)),
+            workers: Arc::new(crate::io_workers::Workers::default()),
+            closed: Default::default(),
         };
         let dimensions = Arc::new(Mutex::new(WindowSize {
             num_cols: 80,
@@ -270,19 +440,21 @@ impl Session {
             cell_height: 18,
         }));
         let title = Arc::new(Mutex::new(String::new()));
+        let applied_dimensions = Arc::new(Mutex::new(
+            *dimensions.lock().unwrap_or_else(|p| p.into_inner()),
+        ));
         let proxy = EventProxy {
             input: input.clone(),
             title: title.clone(),
-            dimensions: dimensions.clone(),
+            dimensions: applied_dimensions.clone(),
             light: light.clone(),
             color_requests: Default::default(),
+            replies: Default::default(),
+            reply_overflow: Default::default(),
+            reply_rate: Default::default(),
         };
         let term = Arc::new(FairMutex::new(Term::new(
-            Config {
-                scrolling_history: scrollback,
-                osc52: Osc52::Disabled,
-                ..Config::default()
-            },
+            crate::terminal_budget::config(scrollback, 80),
             &GridSize { cols: 80, rows: 24 },
             proxy.clone(),
         )));
@@ -290,18 +462,50 @@ impl Session {
         let repaint_pending = Arc::new(AtomicBool::new(false));
         let visible = Arc::new(AtomicBool::new(true));
         let error = Arc::new(Mutex::new(None));
+        let transport = Arc::new(Transport {
+            input: input.clone(),
+            console,
+            job: Arc::new(job),
+            error: error.clone(),
+            ctx: ctx.clone(),
+        });
 
         // Bound transport buffering to 16 chunks (256KiB). A separate parser
         // waits on output or an active synchronized-update deadline, never polls.
         let (output_tx, output_rx) = sync_channel(16);
-        thread::spawn(move || {
-            let mut buffer = vec![0; READ_CHUNK];
-            while let Ok(count) = reader.read(&mut buffer) {
-                if count == 0 || output_tx.send(buffer[..count].to_vec()).is_err() {
-                    break;
-                }
-            }
-        });
+        let (read_done, read_finished) = sync_channel(1);
+        let start_error = |error: std::io::Error| {
+            transport.stop(None);
+            format!("터미널 작업 스레드를 시작하지 못했습니다: {error}")
+        };
+        let read_transport = transport.clone();
+        input.workers.register(
+            thread::Builder::new()
+                .name("pty-read".into())
+                .spawn(move || {
+                    let mut buffer = vec![0; READ_CHUNK];
+                    while !read_transport.input.workers.stopped() {
+                        match reader.read(&mut buffer) {
+                            Ok(0) => break,
+                            Ok(count) => {
+                                if output_tx.send(buffer[..count].to_vec()).is_err() {
+                                    break;
+                                }
+                            }
+                            Err(error) => {
+                                read_transport.stop(Some(format!(
+                                    "터미널 출력 연결이 종료됐습니다: {error}"
+                                )));
+                                let _ = read_done.try_send(());
+                                return;
+                            }
+                        }
+                    }
+                    read_transport.stop(None);
+                    let _ = read_done.try_send(());
+                })
+                .map_err(start_error)?,
+        );
         let output_parser = OutputParser {
             term: term.clone(),
             proxy,
@@ -309,53 +513,100 @@ impl Session {
             repaint_pending: repaint_pending.clone(),
             visible: visible.clone(),
             ctx: ctx.clone(),
+            transport: Some(transport.clone()),
         };
-        thread::spawn(move || output_parser.run(output_rx));
-        let write_error = error.clone();
+        thread::Builder::new()
+            .name("pty-parse".into())
+            .spawn(move || output_parser.run(output_rx))
+            .map_err(start_error)?;
         let write_ctx = ctx.clone();
         let write_term = term.clone();
         let write_revision = revision.clone();
-        thread::spawn(move || {
-            // One ordered queue prevents a later resize from overtaking typed input,
-            // or input from reaching ConPTY before an earlier resize completes.
-            for command in rx {
-                let writing = matches!(command, PtyCommand::Write(_));
-                let result = match command {
-                    PtyCommand::Write(data) => {
-                        let result = writer.write_all(&data).and_then(|_| writer.flush());
-                        queued.fetch_sub(data.len(), Ordering::AcqRel);
-                        result.map_err(|e| e.to_string())
+        let write_transport = transport.clone();
+        input.workers.register(
+            thread::Builder::new()
+                .name("pty-write".into())
+                .spawn(move || {
+                    // One ordered queue prevents a later resize from overtaking typed input,
+                    // or input from reaching ConPTY before an earlier resize completes.
+                    for command in rx {
+                        if write_transport.input.closed.load(Ordering::Acquire)
+                            || write_transport.input.workers.stopped()
+                        {
+                            break;
+                        }
+                        let result = match command {
+                            PtyCommand::Shutdown => break,
+                            PtyCommand::Write(data) => {
+                                let result = writer.write_all(&data).and_then(|_| writer.flush());
+                                write_transport.input.release(data.len());
+                                result.map_err(|e| e.to_string())
+                            }
+                            PtyCommand::Resize(cols, rows) => {
+                                pty::size(cols, rows).and_then(|size| {
+                                    {
+                                        let mut term = write_term.lock();
+                                        crate::terminal_budget::before_resize(
+                                            &mut term,
+                                            scrollback,
+                                            cols as usize,
+                                        );
+                                        term.resize(GridSize {
+                                            cols: cols as usize,
+                                            rows: rows as usize,
+                                        });
+                                        term.set_options(crate::terminal_budget::config(
+                                            scrollback,
+                                            cols as usize,
+                                        ));
+                                    }
+                                    master.resize(size).map_err(|e| e.to_string())?;
+                                    let mut applied = applied_dimensions
+                                        .lock()
+                                        .unwrap_or_else(|p| p.into_inner());
+                                    applied.num_cols = cols;
+                                    applied.num_lines = rows;
+                                    write_revision.fetch_add(1, Ordering::Release);
+                                    write_ctx.request_repaint();
+                                    Ok(())
+                                })
+                            }
+                        };
+                        if let Err(error) = result {
+                            write_transport.stop(Some(error));
+                            break;
+                        }
                     }
-                    PtyCommand::Resize(cols, rows) => pty::size(cols, rows).and_then(|size| {
-                        write_term.lock().resize(GridSize {
-                            cols: cols as usize,
-                            rows: rows as usize,
-                        });
-                        master.resize(size).map_err(|e| e.to_string())?;
-                        write_revision.fetch_add(1, Ordering::Release);
-                        write_ctx.request_repaint();
-                        Ok(())
-                    }),
-                };
-                if let Err(error) = result {
-                    *write_error.lock().unwrap_or_else(|p| p.into_inner()) =
-                        Some(error.to_string());
-                    write_ctx.request_repaint();
-                    if writing {
-                        break;
-                    }
-                }
-            }
-        });
+                })
+                .map_err(start_error)?,
+        );
         let wait_exit = exited.clone();
         let wait_error = error.clone();
-        thread::spawn(move || {
-            if let Err(error) = child.wait() {
-                *wait_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(error.to_string());
+        let wait_transport = transport.clone();
+        let wait_label = profile.label();
+        thread::Builder::new().name("pty-wait".into()).spawn(move || {
+            match child.wait() {
+                Ok(status) if !status.success() => {
+                    wait_error.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(|| format!(
+                        "{wait_label} 세션이 종료 코드 {}로 끝났습니다. 셸 경로·시작 폴더와 WSL 배포판 상태를 확인하세요.", status.exit_code()
+                    ));
+                }
+                Err(error) => {
+                    wait_error.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(|| error.to_string());
+                }
+                _ => {}
             }
             wait_exit.store(true, Ordering::Release);
             ctx.request_repaint();
-        });
+            // The terminal's event proxy also owns an input sender. Explicitly
+            // close transport rather than waiting for that reference cycle.
+            // Let ClosePseudoConsole and the reader drain final output. Only a
+            // stalled host is force-stopped after this bounded background wait.
+            wait_transport.finish_input();
+            if read_finished.recv_timeout(Duration::from_secs(2)).is_err() {
+                wait_transport.stop(Some("셸 종료 뒤 콘솔 출력 연결이 끝나지 않아 중단했습니다.".into()));
+            }
+        }).map_err(start_error)?;
         Ok(Self {
             id,
             label: profile.label(),
@@ -371,7 +622,7 @@ impl Session {
             error,
             summary_cache: Mutex::new((0, Default::default())),
             dimensions,
-            job,
+            transport,
             prompt_files,
         })
     }
@@ -394,6 +645,9 @@ impl Session {
     }
 
     pub fn resize(&self, cols: u16, rows: u16, cell_width: u16, cell_height: u16) {
+        if pty::size(cols, rows).is_err() || self.input.workers.stopped() {
+            return;
+        }
         let mut dimensions = self.dimensions.lock().unwrap_or_else(|p| p.into_inner());
         if dimensions.num_cols == cols && dimensions.num_lines == rows {
             dimensions.cell_width = cell_width;
@@ -419,13 +673,14 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         self.visible.store(false, Ordering::Release);
-        self.job.terminate();
+        self.transport.stop(None);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alacritty_terminal::term::Config;
 
     #[test]
     #[ignore = "Requires an isolated native Codex capture in MINITERM_CODEX_UI_CAPTURE"]
@@ -603,6 +858,9 @@ mod tests {
             input: Input {
                 sender,
                 queued: Default::default(),
+                win32: Arc::new(AtomicBool::new(false)),
+                workers: Default::default(),
+                closed: Default::default(),
             },
             title: Default::default(),
             dimensions: Arc::new(Mutex::new(WindowSize {
@@ -613,6 +871,9 @@ mod tests {
             })),
             light: Default::default(),
             color_requests: Default::default(),
+            replies: Default::default(),
+            reply_overflow: Default::default(),
+            reply_rate: Default::default(),
         };
         OutputParser {
             term: Arc::new(FairMutex::new(Term::new(
@@ -625,6 +886,7 @@ mod tests {
             repaint_pending: Default::default(),
             visible: Arc::new(AtomicBool::new(true)),
             ctx: Context::default(),
+            transport: None,
         }
     }
 
@@ -642,6 +904,138 @@ mod tests {
             assert!(Instant::now() < deadline, "Missing bottom row: {text}");
             thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn protocol_backpressure_releases_the_vt_lock_before_waiting_for_a_writer() {
+        let mut parser = output_fixture();
+        let (input, written) = sync_channel(1);
+        parser.proxy.input.sender = input;
+        parser.proxy.input.send(b"i".to_vec()).unwrap();
+        let queued = parser.proxy.input.queued.clone();
+        let term = parser.term.clone();
+        let (output, bytes) = sync_channel(1);
+        let parser = thread::spawn(move || parser.run(bytes));
+        output.send(b"\x1b[6n".to_vec()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while queued.load(Ordering::Acquire) <= 1 {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(1));
+        }
+        let (done, received) = std::sync::mpsc::channel();
+        let writer = thread::spawn(move || {
+            let _guard = term.lock();
+            assert!(matches!(written.recv().unwrap(), PtyCommand::Write(_)));
+            let reply = match written.recv().unwrap() {
+                PtyCommand::Write(bytes) => bytes,
+                _ => panic!("Missing reply"),
+            };
+            done.send(reply).unwrap();
+        });
+        assert_eq!(
+            received.recv_timeout(Duration::from_secs(2)).unwrap(),
+            b"\x1b[1;1R"
+        );
+        drop(output);
+        writer.join().unwrap();
+        parser.join().unwrap();
+    }
+
+    #[test]
+    fn automatic_response_floods_are_bounded_and_normal_bursts_recover() {
+        let mut rate = ReplyRate::default();
+        let now = rate.updated;
+        assert!(rate.admit(REPLY_BURST as usize, now));
+        assert!(!rate.admit(1, now));
+        assert!(rate.admit(REPLY_PER_SECOND as usize, now + Duration::from_secs(1)));
+        assert!(!rate.admit(REPLY_BURST as usize + 1, now + Duration::from_secs(100)));
+        let parser = output_fixture();
+        parser.proxy.reply("x".repeat(REPLY_BUDGET + 1));
+        assert!(parser.proxy.flush_replies().is_err());
+        assert!(parser.proxy.replies.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    #[ignore = "Requires isolated MINITERM_DATA_DIR and installed Git Bash; no GUI/model"]
+    fn native_console_limits_shutdown_and_final_output_are_preserved() {
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::{
+            Foundation::WAIT_OBJECT_0,
+            System::Threading::{OpenProcess, WaitForSingleObject},
+        };
+        let root =
+            std::env::var_os("MINITERM_DATA_DIR").expect("Run with an isolated fixture directory");
+        std::fs::create_dir_all(&root).unwrap();
+        let profile = ShellProfile::GitBash {
+            bash_path: None,
+            directory: Some(root.into()),
+        };
+        let start = || Session::start(profile.clone(), 50_000, Context::default()).unwrap();
+        let session = start();
+        assert_eq!(
+            session.transport.console.memory_limit(),
+            crate::console_guard::CONSOLE_COMMIT_LIMIT
+        );
+        assert_eq!(session.transport.job.process_memory_limit(), 0);
+        let handle = unsafe { OpenProcess(0x0010_1000, 0, session.pid.unwrap()) };
+        assert!(!handle.is_null());
+        let handle = unsafe { OwnedHandle::from_raw_handle(handle as _) };
+        assert!(!session
+            .transport
+            .console
+            .contains(handle.as_raw_handle() as isize));
+        session.input.send(b"HISTFILE=/dev/null; for ((i=0;i<1000;i++)); do printf 'FINAL-OUTPUT-LINE\\n'; done; printf 'TAIL-''PRESERVED\\n'; exit\r".to_vec()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let text: String = session
+                .term
+                .lock()
+                .grid()
+                .display_iter()
+                .map(|indexed| indexed.cell.c)
+                .collect();
+            if session.exited.load(Ordering::Acquire) && text.contains("TAIL-PRESERVED") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Final shell output did not drain"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        drop(session);
+        assert_eq!(
+            unsafe { WaitForSingleObject(handle.as_raw_handle() as _, 2000) },
+            WAIT_OBJECT_0
+        );
+        let session = start();
+        let term = session.term.clone();
+        let input = session.input.clone();
+        let console = unsafe { OpenProcess(0x0010_1000, 0, session.transport.console.pid) };
+        assert!(!console.is_null());
+        let console = unsafe { OwnedHandle::from_raw_handle(console as _) };
+        input.send(b"HISTFILE=/dev/null; for ((i=0;i<100000;i++)); do printf 'BUSY-OUTPUT-LINE\\n'; done\r".to_vec()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while session.revision.load(Ordering::Acquire) < 8 {
+            assert!(Instant::now() < deadline, "No output before shutdown");
+            thread::sleep(Duration::from_millis(5));
+        }
+        let closing = Instant::now();
+        drop(session);
+        assert!(closing.elapsed() < Duration::from_secs(1));
+        assert_eq!(
+            unsafe { WaitForSingleObject(console.as_raw_handle() as _, 2000) },
+            WAIT_OBJECT_0
+        );
+        while Arc::strong_count(&term) != 1 {
+            assert!(
+                closing.elapsed() < Duration::from_secs(3),
+                "Output worker retained terminal state"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(input.send(b"late".to_vec()).is_err());
+        assert_eq!(input.queued.load(Ordering::Acquire), 0);
     }
 
     #[test]
@@ -695,6 +1089,9 @@ mod tests {
             input: Input {
                 sender: tx,
                 queued: Default::default(),
+                win32: Arc::new(AtomicBool::new(false)),
+                workers: Default::default(),
+                closed: Default::default(),
             },
             title: Default::default(),
             dimensions: Arc::new(Mutex::new(WindowSize {
@@ -705,6 +1102,9 @@ mod tests {
             })),
             light: Arc::new(AtomicBool::new(true)),
             color_requests: Default::default(),
+            replies: Default::default(),
+            reply_overflow: Default::default(),
+            reply_rate: Default::default(),
         };
         let mut term = Term::new(
             Config::default(),
@@ -720,12 +1120,15 @@ mod tests {
         );
         // An ST terminator may cross a PTY read boundary.
         parse_output(&mut processor, &mut term, &proxy, b"\\\x1b]10;#ffffff\x07");
+        proxy.flush_replies().unwrap();
         let receive = || match rx.try_recv().unwrap() {
             PtyCommand::Write(data) => String::from_utf8(data).unwrap(),
-            PtyCommand::Resize(_, _) => panic!("Unexpected resize"),
+            PtyCommand::Resize(_, _) | PtyCommand::Shutdown => panic!("Unexpected control command"),
         };
-        assert_eq!(receive(), "\x1b]10;rgb:1212/3434/5656\x07");
-        assert_eq!(receive(), "\x1b]10;rgb:2626/2f2f/3c3c\x1b\\");
+        assert_eq!(
+            receive(),
+            "\x1b]10;rgb:1212/3434/5656\x07\x1b]10;rgb:2626/2f2f/3c3c\x1b\\"
+        );
         assert!(rx.try_recv().is_err());
     }
 }

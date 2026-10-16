@@ -1,5 +1,7 @@
 # MiniTerm 구현 현황
 
+> 현재 배포·영역별 인계 기준은 [SESSION_HANDOFF.md](SESSION_HANDOFF.md)와 [STATUS.md](STATUS.md)에 있다. 아래 최신 상태 표기·검사 개수·PID와 단계별 기록은 각 작성 시점의 이력으로 읽는다.
+
 **최신 상태 (2026-10-11):** 선택 줄의 한글 가림, AI Battery 기호 폴백, 라이트 모드 ANSI 검정/흰색 선택 영역, 미완료 동기화 프레임과 새 Codex 세션의 알림 helper 선택을 보완했다. 로직 38개와 실제 Codex 메뉴·정지된 목표 재개 메뉴·완료 이벤트의 별도 시험이 통과한다. 실제 Git Bash 크기 변경 뒤 첫 글자 누락 시험은 앞선 실행에서 3개가 실패했으며 아직 해결되지 않았다. 작업 결과 사이의 메뉴 잔상도 재현·해결을 확정하지 않았다. 4세션 앱 유휴 측정은 200MB 이내였지만, 1세션의 확장된 기호 샘플에서 200MB를 초과해 메모리 목표도 추가 조사 대상이다. P0 완료나 새 설치본 검증 완료로 표시하지 않는다. 아래 이전 수치는 당시 빌드의 기록이며 최신 검증은 문서 마지막에 추가한다.
 
 2026-10-10. PLAN.md와 WINDOWS_HANDOFF.md 전체를 읽고 Windows NTFS 작업 폴더에서 구현을 시작했다. 이후 사용자 요구에 따라 Tauri 제안을 네이티브 GPU UI로 변경했다.
@@ -292,3 +294,11 @@ MiniTerm Windows Codex 함수가 실행별 `--no-alt-screen`을 추가한다. �
 새 로직 시험은 실제 VT의 활동 분류에서 원시 인수를 노출하지 않고 계획을 만들지 않는지, 상태/시간 변환에서 임의 문자열을 복사하지 않는지, 실제 요약 Label이 생략될 때 egui 툴팁 영역이 하나인지 검사한다. 로직 53개와 fmt·all-target Clippy `-D warnings`·release가 통과했다. `verify-ux.ps1 -SummarySample -ProgressSample`의 최신 결과는 `artifacts/ux-a61782d0-00ac-4620-9721-263707eb5745`다. 실제 창의 긴 한글 작업명에 Windows 포인터를 잠시 올려 툴팁 하나를 관찰했고 전체 작업명이 표시된 캡처를 검토했다. 포인터는 원래 위치로 복원하며 사람이 중간에 옮긴 경우 덮어쓰지 않는다. 초기 WM_MOUSEMOVE만 사용한 fixture는 툴팁이 뜨지 않아 호버 증거에서 제외했다.
 
 다크/라이트·작은 창·명령 활동·계획 없는 요약·한글 직접 보고·진행률 갱신·더블 클릭 회귀도 통과했다. native 진단 모드에 툴팁 좌표만 기록하며 텍스트를 일반 IPC로 노출하지 않는다. 사람의 호버/스크롤·실제 모델의 계획 보고 검증은 남는다. 새 staging SHA256은 `ef01739494a2b609fce6ee46309d5234b84642d1e7fbbd8800f26e9b523cdc2d`이며 사용자 PID 5852/설치 파일 e625는 유지했다. 테스트 앱/Bash는 종료됐고 입력 누락·메모리 실패를 이번 결과로 해소했다고 표시하지 않는다.
+
+## 2026-10-12: 대체 화면과 마우스 휠 스크롤 동작 정리
+
+agy와 Codex 실행 시 마우스 휠 동작 차이를 확인하고 관련 원인과 우회 방법을 [SCROLL_BEHAVIOR.md](SCROLL_BEHAVIOR.md)에 문서화했다.
+
+- **원인 분석**: agy는 기본 화면 버퍼(Primary Screen)에서 인라인 출력하여 `src/app.rs`의 `term.scroll_display`를 통한 스크롤백 뷰포트 이동이 동작한다. 반면 Codex는 기본적으로 전체 화면 TUI를 위해 대체 화면 버퍼(`TermMode::ALT_SCREEN`)로 진입하며 마우스 추적(`MOUSE_MODE`)을 켜지 않는다.
+- **Alternate Scroll**: 현재 구현은 `ALT_SCREEN`에서 마우스 추적이 꺼져 있을 때 휠 입력을 위/아래 방향키(`\u{1b}[A`, `\u{1b}[B`) 3회로 변환한다. DEC mode 1007을 별도로 확인하지 않는다. Codex의 프롬프트(REPL)에서 방향키를 입력 히스토리 탐색으로 처리하면 휠 입력도 히스토리를 전환한다.
+- **우회 범위**: `Shift + 마우스 휠`은 방향키 전달을 건너뛰고 `term.scroll_display`를 요청하지만 대체 화면의 과거 출력 복원은 실기로 검증하지 않았다. Codex의 `--no-alt-screen`으로 인라인 모드를 선택할 수 있으며 MiniTerm Windows 브리지(`src/shell.rs`)의 자동 주입 조건은 [스크롤 조사](SCROLL_BEHAVIOR.md)에 있다. 수정 완료나 모든 TUI의 동일 동작을 보장하지 않는다.

@@ -47,6 +47,8 @@ request_max_retries = 0
 stream_max_retries = 0
 [projects."${work.replaceAll('\\','/')}"]
 trust_level = "trusted"
+[projects.'${path.resolve(__dirname,'..').toLowerCase()}']
+trust_level = "trusted"
 `);
   const child=spawn('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(__dirname,'verify-goal-hud.ps1'),'-Fixture',root],{stdio:['ignore','pipe','pipe'],windowsHide:true});
   let stdout='',stderr='';

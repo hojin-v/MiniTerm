@@ -1,44 +1,52 @@
-# 현재 상태 진단
+# 현재 상태
 
-2026-10-12. **alpha.6 배포 대상: 제한된 테스터 알파**다. UI와 주요 실행·연동 경로가 구현됐고 일부 실제 CLI/GUI 검증도 완료했지만 P0 전체와 출시 성능 조건은 통과하지 않았다.
+## v0.1.0-alpha.7 — 2026-10-16
 
-| 영역 | 확인된 상태 | 남은 조건 |
-| --- | --- | --- |
-| UI | 네이티브 DX12, 한글/기호 폴백·ANSI 강조, 테마/글꼴/투명도, 이동/크기 조절. 미니 입력의 두 행 제한 제거·하단 정렬 검증 | 실제 IME·다른 모니터/DPI·장치 |
-| 요약 | 읽기 쉬운 상태/활동, 태스크·완료 항목 비율, 긴 작업명의 툴팁 하나 | 실제 모델의 지속적 계획 보고, 사람의 호버 스크롤 |
-| 확장/축소 | 본문 위·가운데·아래 더블 클릭 통일, 요약 단일 클릭 확장 제거 | 실제 사용 중 출력과 픽셀 지연 |
-| CLI | 로컬 제공자를 쓴 실제 Codex/AI Battery 메뉴·배터리·닫기 검증 | 실제 계정/모델·진행 중 도구 출력 |
-| 알림 | 별도 CLI·helper·IPC/Broker에서 기존 설정/콜백 보존 검증 | Windows 알림 실제 클릭과 계정 응답 |
-| 기본 Bash | 지속 세션·입력·ANSI 스타일 구현 | 리사이즈 직후 첫 글자 누락. 기존 기본 Git 검사 5개 통과·3개 실패 |
-| 수정 MSYS | 격리 v3의 입력/신호 각 1,000회. 전용 Bash 자동 선택 구현 후 기본 프로필 11개·GUI 4세션 검증 | 최신 지원 Git 후보·대응 소스 제공·공개 패키징/복구·다른 버전/부하. alpha.3 미포함 |
-| 성능 | 로컬 수정본은 4세션 185.8MB. 실제 공개 alpha.2는 209.7MB, alpha.3은 210.0MB로 200MB 목표 초과. 같은 30초 유휴 CPU 목표 통과 | 공개 빌드의 메모리 초과 원인·개선, GPU·출력 부하·입력→픽셀·다른 장치 기준 미검증 |
-| WSL | 선택 프로필 구현 | 개발 장치의 서비스 오류로 직접 검증 미완료 |
-| 배포 | alpha.3 NSIS·ZIP·문서 공개, Hnode 게시자 설치/제거·설정 보존 통과. WinGet PR #450836 갱신·일반 PR 전환 | 새 WinGet 검증·Microsoft 검토/승인·카탈로그 반영, 서명·업데이트/복구·테스터 장치 검증 |
+Codex 공유 대화·Bash 실행·탭별 알림과 터미널 안정성 변경을 포함하는 테스터 알파다. 실제 공개 파일은 [alpha.7 릴리스](https://github.com/hojin-v/MiniTerm/releases/tag/v0.1.0-alpha.7)의 `BUILD_INFO.json`, `COMPATIBILITY.json`, `SHA256SUMS`로 확인한다. 태그 CI는 빌드·검사·패키징과 일회용 러너의 실제 설치/제거를 확인한 뒤 게시한다.
 
-이전 staging 앱 SHA256은 `ef01739494a2b609fce6ee46309d5234b84642d1e7fbbd8800f26e9b523cdc2d`다. 사용 중인 설치본은 이전 빌드이며 개발 세션을 유지했다. 게시용 파일의 소스 커밋·실행 파일 SHA는 해당 Release의 `BUILD_INFO.json`과 `SHA256SUMS`를 기준으로 한다. 실험 경로·프로세스 번호는 배포 구성으로 사용하지 않는다.
+- 로컬 일반 96개·별도 ConPTY 검사·18만 행 출력·1/4세션 GUI·공유 Codex 0.163.0의 Bash/이력/탭별 알림/재개/R 복구를 통과했다. 실제 계정이나 외부 모델은 호출하지 않았다.
+- 로컬 30초 유휴 최대 앱 working set은 1세션 150,097,920bytes, 4세션 152,948,736bytes다. 공개 CI 파일·다른 장치·전력 소모의 성능 판정과 구분한다.
+- 바깥 콘솔 커밋 상한·취소 가능한 종료·VT 응답 대기 분리·history/결합 문자 상한·글꼴 파일 매핑·큰 executor 응답 스트리밍을 적용했다. [구현과 근거](https://github.com/hojin-v/MiniTerm/blob/v0.1.0-alpha.7/performance/STABILITY_2026-10-16.md)를 따른다.
+- 설치 Git/MSYS의 resize 직후 입력 누락은 **로컬 9개 검사 중 5개 통과·기존 4개 실패**다. 실패를 유지하고 수정 MSYS/PortableGit은 번들하지 않는다. 10월 13일 OOM의 정확한 트리거도 미확정이다.
+- 실제 IME·팝업 클릭·장시간 계정 대화·혼합 DPI·다른 GPU/Windows·입력→픽셀·코드 서명 검증은 남는다. 안정판으로 표시하지 않는다.
+- WinGet [PR #450836](https://github.com/microsoft/winget-pkgs/pull/450836)은 10월 16일 조회 기준 OPEN·미병합, alpha.6 제출 상태다. 이번 GitHub 릴리스와 카탈로그 등록은 별도다.
 
-이번 점검에서 로직 53개·fmt·all-target Clippy가 다시 통과했다. 기본 Git 2.50.1.windows.1의 8개 연동 검사는 5개 통과·기존 리사이즈 3개 실패로 재현됐다. 검사 프로세스의 종료 코드도 1로 기록했다. 실제 재검사 결과는 `COMPATIBILITY.json`에 보관하며 격리 패치 DLL의 성공으로 덮어쓰지 않는다. release/native GUI의 앞선 검증과 이번 패키지 검사를 구분한다. 실제 계정/모델·IME·알림 클릭·입력→픽셀과 깨끗한 설치의 전체 통과를 주장하지 않는다.
+새 세션은 [세션 인계 기준](SESSION_HANDOFF.md)을 먼저 읽는다. 아래는 이전 공개 버전의 이력이다.
 
-공개 alpha.3은 Git 2.55.0.windows.5 CI에서 8개 연동 검사 중 4개 통과·기존 리사이즈 관련 4개 실패를 기록했다. 실제 다운로드한 실행 파일(`2b2f6b32…`)의 격리 4세션 GUI에서는 입력 가용 3행·하단 커서 정렬, 요약·보고·툴팁·테마·더블 클릭이 통과했다. 30.52초 유휴 최대 working set은 210,030,592bytes로 메모리 목표 미달이며, 로컬 빌드의 성공을 공개 파일의 성공으로 대체하지 않는다. [측정 범위](PERFORMANCE.md)를 참고한다.
+## 이전 alpha.6 배포 기록
 
-[테스터 안내](TESTER_GUIDE.md) · [배포 방식](DISTRIBUTION.md) · [구현 기록](IMPLEMENTATION.md) · [전체 체크리스트](WORK_CHECKLIST.md) · [MSYS 후보 기록](patches/MSYS_RUNTIME_VALIDATION.md)
+> 2026-10-13 로컬 기능 후속: [Codex 스크롤 수정](../feature/SCROLL.md)의 실행 파일과 검증을 완료했다. 아래 공개 alpha.6·WinGet 상태는 기존 배포 시점의 기록이며 이 로컬 빌드로 바뀌지 않는다.
 
-후속 개발 빌드는 전용 런타임 폴더의 기본 선택·손상 검증을 추가했다. 로직 56개·Clippy·release와 기본 프로필의 11개 검사가 통과했으며, 공개 alpha.3 설치본과 별도 증거로 관리한다. [전용 Bash 적용 기록](BASH_RUNTIME.md)을 참고한다.
+2026-10-12. **v0.1.0-alpha.6 GitHub 배포 완료, WinGet 공식 등록 검증 중**이다. 제한된 테스터 알파이며 전체 제품의 안정판 검증을 완료한 것은 아니다.
 
-개발 중 원시 로그·SDK·자체 실험 fixture는 `artifacts/`, `.tools/`에 남아 있으며 Git 업로드에서 제외한다. 문서의 fixture ID는 로컬 검증 기록을 식별하는 값으로 저장소에 해당 로그가 포함돼 있다는 뜻이 아니다.
+새 작업 세션은 [세션 인계 기준](SESSION_HANDOFF.md)에서 영역별 문서·코드·검증 근거·미해결 항목을 먼저 확인한다. 구현 목표는 일시중지 상태다.
 
-## alpha.4 정리
+## 배포와 확인 결과
 
-전용 Bash 폴더의 자동 선택·SHA256 검증과 명시적 사용자 경로 보존을 포함한다. 런타임 폴더가 없는 공개 패키지는 설치된 Git을 사용한다. 수정 DLL과 PortableGit은 미포함이며 리사이즈 입력 누락은 해결된 것으로 표시하지 않는다.
+- [공개 alpha.6](https://github.com/hojin-v/MiniTerm/releases/tag/v0.1.0-alpha.6): 설치본·ZIP·실행 파일·문서 등 10개 자산. 다운로드 파일 전체를 GitHub SHA256 digest와 대조하고 실행 파일 로딩을 확인했다.
+- 배포 소스: `09d7c01780be6b091597030e07f0474f3b5b144e`. [태그 CI](https://github.com/hojin-v/MiniTerm/actions/runs/38207963396)의 빌드·패키징·설치·제거·설정 보존·게시가 통과했다.
+- [WinGet CI](https://github.com/hojin-v/MiniTerm/actions/runs/38208455393): alpha.6 매니페스트·공개 설치본 해시·실제 WinGet 설치·앱 로딩·무인 제거·설정 보존 모두 통과. 매니페스트 소스는 `17cbfc701f5cdd533857e79a54de541a7dc4d4eb`이다.
+- Microsoft [PR #450836](https://github.com/microsoft/winget-pkgs/pull/450836)을 같은 alpha.6 파일로 갱신했다. 승인·병합·카탈로그 반영은 별도이며 일반 `winget install miniterm` 가능 여부는 공식 카탈로그를 기준으로 한다.
 
-로컬 로직 56개와 SSE 대기 연결 회귀 1개, fmt·all-target Clippy를 통과했다. 최근 CI의 추가 실패는 복합 상태 검사에서 리사이즈 직후 입력이 누락돼 발생했다. 상태·한글·잡 제어를 먼저 검사하고 마지막에 크기 변경을 확인하도록 순서를 정리했다. 즉시 입력의 네 전용 회귀 검사와 기존 알파 허용 목록은 유지한다. 로컬 기본 Git은 5개 통과·알려진 리사이즈 3개 실패이며 최종 태그 CI 결과는 배포 파일 COMPATIBILITY.json에 기록한다.
+2026-10-12 20:30 KST 조회에서 Microsoft PR은 OPEN·미병합이며 `Azure-Pipeline-Passed`, `Validation-Completed` 라벨과 CLA 통과를 확인했다. 자동 검증의 통과와 공식 등록 완료는 구분한다.
 
-중복 실험과 GUI 재검사 확대는 종료했다. 기존 증거·개발 후보는 보존하며 새 실패 또는 코드 변경 없이 이미 통과한 검사를 반복하지 않는다. WinGet 제출은 alpha.3이며 alpha.4의 GitHub 공개와 별개다.
+## 반복 실패 원인과 수정
 
-## 배포 차단 원인과 수정
+| 실패 | 확인과 수정 |
+| --- | --- |
+| Microsoft `Policy-Test-2.7` | 검증 산출물에서 영문 Description의 성인 콘텐츠 오탐 확인. `explicit plan progress`를 `structured plan progress`로 수정한 alpha.3 재검증은 정책 포함 전체 통과. alpha.6는 새 설치본으로 재검증한다. |
+| Headless 설치 대기 | SmartScreen과 별도의 Attachment Manager 서명 경고를 각각 확인. 일회용 GitHub 러너에서만 설치 검사 동안 조정하고 원래 레지스트리 값을 복원한다. 해시 검증·Defender는 유지한다. |
+| alpha.4 게시 중단 | 앞선 검사에서 실제 기본 데이터 폴더가 생성됨. 테스트별 데이터·IPC 경로를 격리했다. 기존 폴더를 삭제해 통과시키지 않는다. |
+| WinGet 제거 미완료 | 설치 프로그램의 `QuietUninstallString` 누락. alpha.6가 `/S` 무인 제거 명령을 등록한다. NSIS 임시 자식의 실제 파일·레지스트리 삭제 완료도 확인한다. |
 
-alpha.4 태그 CI의 설치 검사는 앞선 테스트가 만든 기본 설정 폴더 때문에 중단됐다. alpha.5는 전체 테스트와 Git 호환성 자식 프로세스의 데이터/IPC 경로를 격리한다. 기존 설정을 삭제해 검사를 통과시키지 않는다. WinGet 로컬 설치 CI는 SmartScreen 대기를 기록했으며, 일회용 GitHub 러너에서만 평판 프롬프트를 잠시 해제하고 finally에서 원래 값을 복원해 기능을 검사한다. 설치본 SHA256과 Defender 검사는 유지하며 사용자 장치의 SmartScreen 통과를 주장하지 않는다.
+반복 GUI/런타임 실험은 종료했고 기존 코드·후보·증거는 보존했다. 중복 일반 빌드는 취소하고 배포 태그와 WinGet 검사 결과를 각각 확인했다. alpha.4 실패 태그와 alpha.3/alpha.5 공개 자산을 덮어쓰지 않았다.
 
-Microsoft PR #450836의 영문 문구를 structured plan progress로 갱신했다. Policy-Test-2.7의 해제·승인·병합은 Microsoft 재검증 결과를 기준으로 하며 단어 수정만으로 완료되었다고 표시하지 않는다.
+## 알려진 제품 제한
 
-alpha.5는 게시·다운로드 해시·실행·독립 설치 시험을 통과했다. 후속 WinGet 검사에서 QuietUninstallString 누락으로 일반 제거 창이 열리는 제품 결함을 발견했다. alpha.6 설치본은 무인 제거 명령을 등록하고 CI가 이 등록값과 실제 제거를 검사한다. alpha.3~alpha.5의 기존 자산과 태그는 보존한다.
+- 기본 Git Bash의 리사이즈 직후 입력 누락은 남는다. 공개 alpha.6의 `COMPATIBILITY.json`은 8개 연동 검사 중 **4개 통과·알려진 리사이즈 4개 실패**를 기록한다. 다운로드 파일의 SHA256을 공개 digest와 대조했으며 실제 실패를 유지한다.
+- 전용 Bash 선택·SHA256 검증 코드는 포함하지만 **수정 MSYS DLL과 PortableGit은 번들하지 않는다**. 별도 Git for Windows가 필요하다. 개발 후보의 상태는 [BASH_RUNTIME.md](BASH_RUNTIME.md)를 참고한다.
+- alpha.3 공개 빌드의 4세션 유휴 메모리는 약 210MB로 200MB 목표를 초과했다. alpha.6의 성능 목표 통과를 주장하지 않는다. [PERFORMANCE.md](PERFORMANCE.md)에 측정 범위를 기록했다.
+- 실제 IME·혼합 DPI·다른 장치, 실제 계정/모델과 알림 클릭, WSL·출력 부하·입력 지연·코드 서명 검증이 남는다.
+- Headless 설치 기능 검사의 성공은 일반 사용자 장치의 SmartScreen 평판이나 공식 카탈로그 설치 성공을 의미하지 않는다.
+
+[테스터 안내](TESTER_GUIDE.md) · [WinGet 상태](WINGET.md) · [전체 체크리스트](WORK_CHECKLIST.md)

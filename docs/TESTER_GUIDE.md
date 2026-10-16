@@ -1,19 +1,19 @@
 # 테스터 안내
 
-현재 수정본은 `v0.1.0-alpha.6`, Windows 11 x64용 제한된 알파다. 기본 Git Bash의 리사이즈 입력 누락과 출력 부하·입력 지연 등 미검증 성능 조건이 남아 있다. 안정판 터미널을 대체하는 용도로 권장하지 않는다.
+현재 수정본은 `v0.1.0-alpha.7`, Windows 11 x64용 제한된 알파다. 기본 Git Bash의 리사이즈 입력 누락과 출력 부하·입력 지연 등 미검증 성능 조건이 남아 있다. 안정판 터미널을 대체하는 용도로 권장하지 않는다.
 
 ## 설치
 
 WinGet 등록 완료 후에는 `winget install miniterm`으로 설치할 수 있다. `winget install MiniTerm`과 `winget install hnode.miniterm`도 사용할 수 있다. 등록 전에는 아래 GitHub Releases 설치본을 사용한다. [WinGet 등록 상태](WINGET.md)를 확인한다. WinGet 매니페스트에는 Git·Visual C++ 런타임 의존성을 넣으며 필요한 경우 관리자 권한을 요청할 수 있다.
 
 1. Git for Windows, DX12 지원 그래픽 드라이버, 최신 [Microsoft Visual C++ v14 x64 런타임](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)을 준비한다. 공식 페이지의 [x64 설치 파일](https://aka.ms/vc14/vc_redist.x64.exe)을 사용한다. 런타임 설치는 관리자 권한이 필요할 수 있으며 MiniTerm이 자동 설치하지 않는다.
-2. [Releases](https://github.com/hojin-v/MiniTerm/releases)에서 `MiniTerm-0.1.0-alpha.6-windows-x64-setup.exe`와 `SHA256SUMS`를 받는다. `Source code` ZIP은 실행 파일이 아니다.
-3. PowerShell의 `Get-FileHash .\MiniTerm-0.1.0-alpha.6-windows-x64-setup.exe -Algorithm SHA256` 결과를 `SHA256SUMS`의 같은 파일 항목과 비교한다.
+2. [Releases](https://github.com/hojin-v/MiniTerm/releases)에서 `MiniTerm-0.1.0-alpha.7-windows-x64-setup.exe`와 `SHA256SUMS`를 받는다. `Source code` ZIP은 실행 파일이 아니다.
+3. PowerShell의 `Get-FileHash .\MiniTerm-0.1.0-alpha.7-windows-x64-setup.exe -Algorithm SHA256` 결과를 `SHA256SUMS`의 같은 파일 항목과 비교한다.
 4. 설치본을 실행한다. 사용자별 `%LOCALAPPDATA%\Programs\MiniTerm`에 설치하며 관리자 권한은 요구하지 않는다. 설치 후 해당 폴더의 `miniterm.exe`를 실행한다.
 
 현재 설치본은 코드 서명이 없다. 출처·해시를 확인하고 조직의 실행 정책을 따른다. 백신을 끄거나 차단을 일괄 우회하지 않는다. Codex·Claude Code·AI Battery는 포함하지 않으며 각 도구의 설치와 로그인을 별도로 준비한다.
 
-압축형 `MiniTerm-0.1.0-alpha.6-windows-x64.zip`은 같은 폴더에 모두 풀고 `miniterm.exe`를 실행한다. 알림 등록은 자동 수행하지 않으며 설정에서 별도로 등록한다. ZIP과 설치본은 같은 설정 경로와 단일 앱 인스턴스를 사용한다. 설정까지 분리된 포터블 모드는 아니다.
+압축형 `MiniTerm-0.1.0-alpha.7-windows-x64.zip`은 같은 폴더에 모두 풀고 `miniterm.exe`를 실행한다. 알림 등록은 자동 수행하지 않으며 설정에서 별도로 등록한다. ZIP과 설치본은 같은 설정 경로와 단일 앱 인스턴스를 사용한다. 설정까지 분리된 포터블 모드는 아니다.
 
 ## 시험 순서
 
@@ -24,11 +24,11 @@ WinGet 등록 완료 후에는 `winget install miniterm`으로 설치할 수 있
 | 3 | 헤더 드래그 이동, 가장자리 크기 조절, 재실행 후 위치와 설정 |
 | 4 | 설정을 열어 둔 상태의 다크/라이트 전환, 글꼴·한글·ANSI 강조·투명도 |
 | 5 | `sleep 3; printf 'done\n'` 실행 중 숨기기와 복귀, 여러 세션 전환 |
-| 6 | 실제 한글 IME 조합·취소·후보창, 선택·복사·붙여넣기와 단축키 |
+| 6 | 실제 한글 IME 조합·취소·후보창, 선택·복사·붙여넣기와 단축키, 마우스 휠 스크롤 |
 | 7 | 새 세션에서 이미 설치한 에이전트 실행, 재개 선택창·AI Battery·알림 전달과 클릭 |
 | 8 | 명시적인 작업 계획의 현재 태스크·완료 비율, 긴 작업명에 툴팁 하나 |
 
-리사이즈 입력 문제의 재현에는 `printf 'resize-test\n'` 같은 무해한 명령을 사용한다. 첫 글자가 누락되는 경우를 기존의 알려진 문제로 기록한다. 데이터 변경이나 배포 명령으로 시험하지 않는다. 격리된 MSYS 수정 DLL을 사용자 Git 설치 경로에 복사하지 않는다.
+리사이즈 입력 문제의 재현에는 `printf 'resize-test\n'` 같은 무해한 명령을 사용한다. 첫 글자가 누락되는 경우를 기존의 알려진 문제로 기록한다. 데이터 변경이나 배포 명령으로 시험하지 않는다. 격리된 MSYS 수정 DLL을 사용자 Git 설치 경로에 복사하지 않는다. Codex 등 대체 화면 버퍼 TUI에서 마우스 휠 굴림 시 방향키/채팅 전환 현상과 `Shift + 휠` 또는 `--no-alt-screen` 우회법은 [스크롤 동작 안내](SCROLL_BEHAVIOR.md)를 참고한다.
 
 계획을 출력하거나 직접 보고하지 않는 에이전트에는 진행률이 표시되지 않을 수 있다. 저장소의 `miniterm-progress` skill은 프로젝트 안의 새 에이전트 세션에서 별도로 시험한다. 요약은 작업 성공이나 소요 시간을 추정하지 않는다.
 

@@ -6,7 +6,7 @@ use winreg::{
     RegKey,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ShellProfile {
     GitBash {
@@ -64,9 +64,61 @@ fn bash_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
 
-fn codex_function(launch: &str) -> String {
+fn codex_function(launch: &str, battery_managed: bool) -> String {
+    // Per-invocation config overrides select an embedded Codex backend. Keep
+    // the native shared-server policy unless the caller opts into integration;
+    // otherwise resuming a thread held by that server fails its writer lease.
+    // Inline keeps Codex on the host console and preserves scrollback. The
+    // row runner re-encodes terminal replies as keys, leaking OSC colors into
+    // the composer. Respect explicit caller layout choices.
+    let battery_environment = if battery_managed {
+        r#"AI_BATTERY_WIN_LAYOUT="${AI_BATTERY_WIN_LAYOUT:-${CLAUDEX_BATTERY_WIN_LAYOUT:-${AI_BATTERY_LAYOUT:-$([[ ${MINITERM_CODEX_INLINE:-1} == 0 ]] && printf composite || printf inline)}}}" "#
+    } else {
+        ""
+    };
+    // Preparing in the GUI keeps the managed server outside the shell Job.
+    // Per-call overrides and noninteractive commands remain native opt-outs.
+    let preparation = r#"if [[ -n ${MINITERM_SESSION_ID:-} && -n ${MINITERM_NOTIFY_EXE:-} ]]; then
+      __miniterm_connection=$(command "$MINITERM_NOTIFY_EXE" codex-prepare -- "${__miniterm_codex_args[@]}" "$@") || return $?
+      if [[ $__miniterm_connection == ws://127.0.0.1:*\ * ]]; then
+        local -x MINITERM_CODEX_LINK_TOKEN="${__miniterm_connection#* }"
+        __miniterm_codex_args+=(--remote "${__miniterm_connection%% *}" --remote-auth-token-env MINITERM_CODEX_LINK_TOKEN)
+        if [[ $__miniterm_has_directory == 0 ]]; then __miniterm_codex_args+=(--cd "$PWD"); fi
+      fi
+    fi
+    "#;
+    let battery_environment = format!("{preparation}{battery_environment}");
     format!(
-        "if [[ $(builtin type -t codex) != function && $(builtin type -t codex) != alias ]]; then\n  codex() {{\n    local __miniterm_notify __miniterm_arg __miniterm_inline=1\n    local -a __miniterm_codex_args=()\n    for __miniterm_arg in \"$@\"; do\n      if [[ $__miniterm_arg == --no-alt-screen ]]; then __miniterm_inline=0; fi\n    done\n    if [[ ${{MINITERM_CODEX_INLINE:-1}} != 0 && $__miniterm_inline == 1 ]]; then\n      __miniterm_codex_args+=(--no-alt-screen)\n    fi\n    if [[ -n ${{MINITERM_NOTIFY_EXE:-}} ]] && __miniterm_notify=$(command \"$MINITERM_NOTIFY_EXE\" codex-notify-override \"$@\" 2>/dev/null) && [[ $__miniterm_notify == \"notify=[\"* ]]; then\n      __miniterm_codex_args+=(-c \"$__miniterm_notify\")\n    fi\n    command {launch} \"${{__miniterm_codex_args[@]}}\" \"$@\"\n  }}\nfi\n"
+        r#"if [[ $(builtin type -t codex) != function && $(builtin type -t codex) != alias ]]; then
+  codex() {{
+    local __miniterm_notify __miniterm_shell __miniterm_arg __miniterm_connection __miniterm_exit __miniterm_inline=1 __miniterm_daemon=1 __miniterm_has_directory=0
+    local -a __miniterm_codex_args=()
+    for __miniterm_arg in "$@"; do
+      if [[ $__miniterm_arg == --no-alt-screen ]]; then __miniterm_inline=0; fi
+      if [[ $__miniterm_arg == --no-daemon ]]; then __miniterm_daemon=0; fi
+      if [[ $__miniterm_arg == -C || $__miniterm_arg == -C?* || $__miniterm_arg == --cd || $__miniterm_arg == --cd=* ]]; then __miniterm_has_directory=1; fi
+    done
+    if [[ ${{MINITERM_CODEX_INLINE:-1}} != 0 && $__miniterm_inline == 1 ]]; then
+      __miniterm_codex_args+=(--no-alt-screen)
+    fi
+    if [[ ${{MINITERM_AGENT_BASH:-0}} == 1 && -n ${{MINITERM_NOTIFY_EXE:-}} ]]; then
+      if __miniterm_shell=$(command "$MINITERM_NOTIFY_EXE" codex-shell-config {launch} -- "$@") && [[ $__miniterm_shell == developer_instructions=* ]]; then
+        if [[ $__miniterm_daemon == 1 ]]; then __miniterm_codex_args+=(--no-daemon); fi
+        __miniterm_codex_args+=(-c features.unified_exec=true -c "$__miniterm_shell")
+      fi
+    fi
+    if [[ (${{MINITERM_AGENT_BASH:-0}} == 1 || ${{MINITERM_CODEX_SESSION_NOTIFY:-0}} == 1) && -n ${{MINITERM_NOTIFY_EXE:-}} ]] && __miniterm_notify=$(command "$MINITERM_NOTIFY_EXE" codex-notify-override "$@" 2>/dev/null) && [[ $__miniterm_notify == "notify=["* ]]; then
+      __miniterm_codex_args+=(-c "$__miniterm_notify")
+    fi
+    {battery_environment}command {launch} "${{__miniterm_codex_args[@]}}" "$@"
+    __miniterm_exit=$?
+    if [[ -n $__miniterm_connection ]]; then
+      command "$MINITERM_NOTIFY_EXE" codex-detach "$__miniterm_connection" >/dev/null 2>&1
+    fi
+    return $__miniterm_exit
+  }}
+fi
+"#
     )
 }
 
@@ -79,17 +131,22 @@ pub fn codex_windows_bridge() -> Option<String> {
     let directories = windows_path_entries(&path);
     for dir in &directories {
         if dir.join("codex.exe").is_file() {
-            return Some(codex_function("codex"));
+            return Some(codex_function(
+                &bash_quote(&dir.join("codex.exe").to_string_lossy().replace('\\', "/")),
+                false,
+            ));
         }
         let launcher = dir.join("codex.cmd");
         if !launcher.is_file() {
             continue;
         }
         let header = std::fs::read_to_string(&launcher).ok()?;
-        if !header.contains("AI_BATTERY_MANAGED_CODEX_WRAPPER=1") {
-            return None;
-        }
-        let bridge = dir.join("codex.cmd.ai-battery.cjs");
+        let bridge = if header.contains("AI_BATTERY_MANAGED_CODEX_WRAPPER=1") {
+            dir.join("codex.cmd.ai-battery.cjs")
+        } else {
+            // The official npm launcher works without AI Battery too.
+            dir.join("node_modules/@openai/codex/bin/codex.js")
+        };
         if !bridge.is_file() {
             return None;
         }
@@ -97,13 +154,56 @@ pub fn codex_windows_bridge() -> Option<String> {
             .iter()
             .map(|p| p.join("node.exe"))
             .find(|p| p.is_file())?;
-        return Some(codex_function(&format!(
-            "{} {}",
-            bash_quote(&node.to_string_lossy().replace('\\', "/")),
-            bash_quote(&bridge.to_string_lossy().replace('\\', "/"))
-        )));
+        return Some(codex_function(
+            &format!(
+                "{} {}",
+                bash_quote(&node.to_string_lossy().replace('\\', "/")),
+                bash_quote(&bridge.to_string_lossy().replace('\\', "/"))
+            ),
+            header.contains("AI_BATTERY_MANAGED_CODEX_WRAPPER=1"),
+        ));
     }
     None
+}
+
+/// Stable native/npm launcher for the executor, bypassing terminal decorations.
+pub fn codex_executor_launch() -> Option<Vec<String>> {
+    let directories = windows_path_entries(&env::var_os("PATH")?);
+    for dir in &directories {
+        let exe = dir.join("codex.exe");
+        if exe.is_file() {
+            return Some(vec![exe.to_string_lossy().into_owned()]);
+        }
+    }
+    let node = directories
+        .iter()
+        .map(|dir| dir.join("node.exe"))
+        .find(|path| path.is_file())?;
+    let mut scripts: Vec<PathBuf> = directories
+        .iter()
+        .map(|dir| dir.join("node_modules/@openai/codex/bin/codex.js"))
+        .collect();
+    if let Some(appdata) = env::var_os("APPDATA") {
+        scripts.push(PathBuf::from(appdata).join("npm/node_modules/@openai/codex/bin/codex.js"));
+    }
+    let script = scripts.into_iter().find(|path| path.is_file())?;
+    Some(vec![
+        node.to_string_lossy().into_owned(),
+        script.to_string_lossy().into_owned(),
+    ])
+}
+
+pub fn windows_shell_bridge() -> String {
+    // MSYS otherwise rewrites /bin/bash and /home/... into Windows Git paths.
+    // Scope conversion flags to this child, preserving normal Git Bash commands.
+    let executable = bash_quote(&wsl_executable().to_string_lossy().replace('\\', "/"));
+    let mut script: String = ["wsl", "wsl.exe"].into_iter().map(|name| format!(
+        "if [[ $(builtin type -t {name}) != function && $(builtin type -t {name}) != alias ]]; then\n  {name}() {{ MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' command {executable} \"$@\"; }}\nfi\n"
+    )).collect();
+    if let Some(codex) = codex_windows_bridge() {
+        script.push_str(&codex);
+    }
+    script
 }
 
 fn windows_path_entries(path: &std::ffi::OsStr) -> Vec<PathBuf> {
@@ -212,6 +312,9 @@ impl ShellProfile {
                 command.env("CHERE_INVOKING", "1");
                 command.env("MSYSTEM", "MINGW64");
                 command.env("SHELL", "/bin/bash");
+                // Use this profile's Bash, including a custom/runtime path. A
+                // native agent must not resolve System32's WSL bash launcher.
+                command.env("MINITERM_BASH_EXE", &bash);
                 command
             }
             Self::Wsl {
@@ -334,6 +437,229 @@ impl ShellProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_notify_wrapper_preserves_literal_arguments_exit_status_and_parent_token() {
+        let bash = detect_git_bash().unwrap();
+        let root = std::env::temp_dir().join(format!("miniterm-link-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let helper = root.join("helper.sh");
+        let calls = root.join("calls.txt");
+        std::fs::write(
+            &helper,
+            r#"#!/bin/sh
+printf '%s\n' "$1" >> "$FIXTURE_CALLS"
+case "$1" in
+ codex-prepare) printf 'ws://127.0.0.1:12345 fixture-token\n' ;;
+ codex-detach) printf '%s\n' "$2" >> "$FIXTURE_CALLS"; exit 1 ;;
+esac
+"#,
+        )
+        .unwrap();
+        let launch = format!(
+            "{} --noprofile --norc -c {} fixture",
+            bash_quote(&bash.to_string_lossy().replace('\\', "/")),
+            bash_quote("printf '%s\\n' \"$MINITERM_CODEX_LINK_TOKEN\" \"$@\"; exit 23")
+        );
+        let script=format!("{}\nprintf 'pwd=%s\\n' \"$(pwd -W)\"; codex resume 'literal thread'; printf 'exit=%s\\nparent=%s\\n' \"$?\" \"$MINITERM_CODEX_LINK_TOKEN\"",codex_function(&launch,false));
+        let output = std::process::Command::new(bash)
+            .args(["--noprofile", "--norc", "-c", &script])
+            .env(
+                "MINITERM_SESSION_ID",
+                "71a461b4-1259-4ac7-b321-243d742c54b4",
+            )
+            .env(
+                "MINITERM_NOTIFY_EXE",
+                helper.to_string_lossy().replace('\\', "/"),
+            )
+            .env("FIXTURE_CALLS", calls.to_string_lossy().replace('\\', "/"))
+            .env("MINITERM_CODEX_LINK_TOKEN", "original-parent")
+            .env_remove("BASH_ENV")
+            .env_remove("MINITERM_AGENT_BASH")
+            .env_remove("MINITERM_CODEX_SESSION_NOTIFY")
+            .env_remove("MINITERM_CODEX_INLINE")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8(output.stdout).unwrap();
+        let mut lines = text.lines();
+        let directory = lines.next().unwrap().strip_prefix("pwd=").unwrap();
+        assert_eq!(
+            lines.collect::<Vec<_>>(),
+            [
+                "fixture-token",
+                "--no-alt-screen",
+                "--remote",
+                "ws://127.0.0.1:12345",
+                "--remote-auth-token-env",
+                "MINITERM_CODEX_LINK_TOKEN",
+                "--cd",
+                directory,
+                "resume",
+                "literal thread",
+                "exit=23",
+                "parent=original-parent"
+            ]
+        );
+        assert_eq!(
+            std::fs::read_to_string(calls).unwrap(),
+            "codex-prepare\ncodex-detach\nws://127.0.0.1:12345 fixture-token\n"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn codex_battery_launch_preserves_history_and_explicit_layouts() {
+        let bash = detect_git_bash().unwrap();
+        let launch = format!(
+            "{} --noprofile --norc -c {} fixture",
+            bash_quote(&bash.to_string_lossy().replace('\\', "/")),
+            bash_quote("printf '%s\\n' \"${AI_BATTERY_WIN_LAYOUT-unset}\" \"$@\"")
+        );
+        for (managed, explicit, inline, expected) in [
+            (true, None, "1", "inline"),
+            (true, Some("composite"), "1", "composite"),
+            (true, Some("inline"), "1", "inline"),
+            (true, None, "0", "composite"),
+            (false, None, "1", "unset"),
+        ] {
+            let script = format!(
+                "{}\ncodex 'draft with spaces' --no-daemon; printf 'parent=%s\\n' \"${{AI_BATTERY_WIN_LAYOUT-unset}}\"",
+                codex_function(&launch, managed)
+            );
+            let mut command = std::process::Command::new(&bash);
+            command.args(["--noprofile", "--norc", "-c", &script]);
+            for name in [
+                "MINITERM_NOTIFY_EXE",
+                "AI_BATTERY_WIN_LAYOUT",
+                "CLAUDEX_BATTERY_WIN_LAYOUT",
+                "AI_BATTERY_LAYOUT",
+                "BASH_ENV",
+            ] {
+                command.env_remove(name);
+            }
+            command.env("MINITERM_CODEX_INLINE", inline);
+            if let Some(value) = explicit {
+                command.env("AI_BATTERY_WIN_LAYOUT", value);
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let text = String::from_utf8(output.stdout).unwrap();
+            let lines: Vec<_> = text.lines().collect();
+            assert_eq!(lines[0], expected);
+            assert_eq!(
+                lines[lines.len() - 3..lines.len() - 1],
+                ["draft with spaces", "--no-daemon"]
+            );
+            assert_eq!(
+                lines.last().copied(),
+                Some(&*format!("parent={}", explicit.unwrap_or("unset")))
+            );
+            assert_eq!(lines.contains(&"--no-alt-screen"), inline != "0");
+        }
+        let script = format!(
+            "codex() {{ printf existing; }}\n{}\ncodex",
+            codex_function(&launch, true)
+        );
+        let output = std::process::Command::new(bash)
+            .args(["--noprofile", "--norc", "-c", &script])
+            .output()
+            .unwrap();
+        assert_eq!(output.stdout, b"existing");
+    }
+
+    #[test]
+    fn codex_keeps_native_backend_and_only_adds_explicit_integrations() {
+        let bash = detect_git_bash().unwrap();
+        let root = std::env::temp_dir().join(format!("miniterm-codex-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let helper = root.join("helper.sh");
+        let calls = root.join("calls.txt");
+        std::fs::write(
+            &helper,
+            r#"#!/bin/sh
+printf '%s\n' "$1" >> "$FIXTURE_CALLS"
+case "$1" in
+  codex-shell-config) printf '%s\n' 'developer_instructions=fixture instructions' ;;
+  codex-notify-override) printf '%s\n' 'notify=["fixture"]' ;;
+esac
+"#,
+        )
+        .unwrap();
+        let launch = format!(
+            "{} --noprofile --norc -c {} fixture",
+            bash_quote(&bash.to_string_lossy().replace('\\', "/")),
+            bash_quote("printf '%s\\n' \"$@\"")
+        );
+        for (agent_bash, session_notify, expected_calls) in [
+            (None, None, ""),
+            (Some("0"), None, ""),
+            (
+                Some("1"),
+                None,
+                "codex-shell-config\ncodex-notify-override\n",
+            ),
+            (None, Some("1"), "codex-notify-override\n"),
+        ] {
+            std::fs::write(&calls, "").unwrap();
+            let script = format!(
+                "{}\ncodex resume 'thread literal'",
+                codex_function(&launch, false)
+            );
+            let mut command = std::process::Command::new(&bash);
+            command.args(["--noprofile", "--norc", "-c", &script]);
+            for name in [
+                "BASH_ENV",
+                "MINITERM_AGENT_BASH",
+                "MINITERM_CODEX_SESSION_NOTIFY",
+                "MINITERM_CODEX_INLINE",
+            ] {
+                command.env_remove(name);
+            }
+            command.env(
+                "MINITERM_NOTIFY_EXE",
+                helper.to_string_lossy().replace('\\', "/"),
+            );
+            command.env("FIXTURE_CALLS", calls.to_string_lossy().replace('\\', "/"));
+            if let Some(value) = agent_bash {
+                command.env("MINITERM_AGENT_BASH", value);
+            }
+            if let Some(value) = session_notify {
+                command.env("MINITERM_CODEX_SESSION_NOTIFY", value);
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let text = String::from_utf8(output.stdout).unwrap();
+            let args: Vec<_> = text.lines().collect();
+            assert_eq!(&args[args.len() - 2..], ["resume", "thread literal"]);
+            assert_eq!(std::fs::read_to_string(&calls).unwrap(), expected_calls);
+            if expected_calls.is_empty() {
+                assert_eq!(args, ["--no-alt-screen", "resume", "thread literal"]);
+            } else {
+                assert_eq!(args.contains(&"--no-daemon"), agent_bash == Some("1"));
+                assert!(args.contains(&"notify=[\"fixture\"]"));
+                assert_eq!(
+                    args.contains(&"features.unified_exec=true"),
+                    agent_bash == Some("1")
+                );
+            }
+        }
+        std::fs::remove_file(helper).unwrap();
+        std::fs::remove_file(calls).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
 
     #[test]
     fn invalid_explicit_bash_never_falls_back() {

@@ -10,7 +10,7 @@ use windows_sys::Win32::{
     System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
         SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
     },
     UI::WindowsAndMessaging::{
         GetForegroundWindow, IsWindowVisible, SetForegroundWindow, SetWindowPos, ShowWindow,
@@ -282,6 +282,93 @@ pub fn hide(hwnd: isize) {
 }
 pub fn visible(hwnd: isize) -> bool {
     unsafe { IsWindowVisible(hwnd as HWND) != 0 }
+}
+
+/// Dispatch one UI frame while the HUD is hidden, without showing or focusing it.
+/// Windows does not deliver request_redraw's invalidation to an invisible window.
+pub fn wake_hidden(hwnd: isize) {
+    if !visible(hwnd) {
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(
+                hwnd as HWND,
+                windows_sys::Win32::UI::WindowsAndMessaging::WM_PAINT,
+                0,
+                0,
+            );
+        }
+    }
+}
+
+/// Immediate egui viewports request a paint of their parent. Relay the child's
+/// requested paints when Windows suppresses paints of a hidden parent HUD.
+/// Only windows on this UI thread are inspected; the reference is a HWND, not
+/// borrowed Rust state. Windows removes the subclass when the child is destroyed.
+pub fn relay_settings_paints(parent: isize) -> bool {
+    struct Search {
+        parent: isize,
+        installed: bool,
+    }
+    unsafe extern "system" fn visit(child: HWND, data: LPARAM) -> BOOL {
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowTextW;
+        let search = &mut *(data as *mut Search);
+        let mut title = [0u16; 64];
+        let length = GetWindowTextW(child, title.as_mut_ptr(), title.len() as i32);
+        if String::from_utf16_lossy(&title[..length as usize]) == "MiniTerm 설정" {
+            use windows_sys::Win32::Graphics::Dwm::{
+                DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUNDSMALL,
+            };
+            // Match the HUD's compositor corner; the client paints to the edge.
+            let preference = DWMWCP_ROUNDSMALL;
+            DwmSetWindowAttribute(
+                child,
+                DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+                &preference as *const _ as _,
+                size_of_val(&preference) as u32,
+            );
+            search.installed = windows_sys::Win32::UI::Shell::SetWindowSubclass(
+                child,
+                Some(settings_paint_callback),
+                0x4d54,
+                search.parent as usize,
+            ) != 0;
+            return 0;
+        }
+        1
+    }
+    let mut search = Search {
+        parent,
+        installed: false,
+    };
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::EnumThreadWindows(
+            windows_sys::Win32::System::Threading::GetCurrentThreadId(),
+            Some(visit),
+            &mut search as *mut _ as LPARAM,
+        );
+    }
+    search.installed
+}
+
+unsafe extern "system" fn settings_paint_callback(
+    hwnd: HWND,
+    message: u32,
+    wparam: usize,
+    lparam: LPARAM,
+    id: usize,
+    parent: usize,
+) -> isize {
+    use windows_sys::Win32::UI::{
+        Shell::{DefSubclassProc, RemoveWindowSubclass},
+        WindowsAndMessaging::{WM_NCDESTROY, WM_PAINT},
+    };
+    if message == WM_NCDESTROY {
+        RemoveWindowSubclass(hwnd, Some(settings_paint_callback), id);
+    }
+    let result = DefSubclassProc(hwnd, message, wparam, lparam);
+    if message == WM_PAINT {
+        wake_hidden(parent as isize);
+    }
+    result
 }
 pub fn focused(hwnd: isize) -> bool {
     unsafe { GetForegroundWindow() == hwnd as HWND }
@@ -709,6 +796,9 @@ unsafe impl Sync for ProcessJob {}
 
 impl ProcessJob {
     pub fn assign(process: isize) -> Result<Self, String> {
+        Self::assign_with_memory_limit(process, None)
+    }
+    pub fn assign_with_memory_limit(process: isize, bytes: Option<usize>) -> Result<Self, String> {
         unsafe {
             let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
             if handle.is_null() {
@@ -717,6 +807,10 @@ impl ProcessJob {
             let job = Self(handle);
             let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
             limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if let Some(bytes) = bytes {
+                limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+                limits.ProcessMemoryLimit = bytes;
+            }
             if SetInformationJobObject(
                 handle,
                 JobObjectExtendedLimitInformation,
@@ -734,6 +828,38 @@ impl ProcessJob {
         unsafe {
             TerminateJobObject(self.0, 1);
         }
+    }
+    #[cfg(test)]
+    pub(crate) fn process_memory_limit(&self) -> usize {
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
+        assert_ne!(
+            unsafe {
+                windows_sys::Win32::System::JobObjects::QueryInformationJobObject(
+                    self.0,
+                    JobObjectExtendedLimitInformation,
+                    &mut limits as *mut _ as _,
+                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        limits.ProcessMemoryLimit
+    }
+    #[cfg(test)]
+    pub(crate) fn contains(&self, process: isize) -> bool {
+        let mut belongs = 0;
+        assert_ne!(
+            unsafe {
+                windows_sys::Win32::System::JobObjects::IsProcessInJob(
+                    process as HANDLE,
+                    self.0,
+                    &mut belongs,
+                )
+            },
+            0
+        );
+        belongs != 0
     }
 }
 impl Drop for ProcessJob {

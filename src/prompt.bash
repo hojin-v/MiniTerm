@@ -11,9 +11,19 @@ for __miniterm_login_file in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.p
 done
 builtin unset __miniterm_login_file
 
-# Bash doesn't resolve .cmd launchers. Preserve an installed Windows AI Battery
-# bridge without editing PATH or overriding a user's existing alias/function.
+# Keep Linux arguments intact when invoking wsl from MSYS, and resolve a managed
+# Windows .cmd Codex bridge. Preserve existing aliases/functions and PATH.
 if [[ -n $MSYSTEM && -r $MINITERM_PROMPT_DIR/windows-bridge.bash ]]; then
+    if [[ ${MINITERM_AGENT_BASH:-1} != 0 && -n $MINITERM_BASH_EXE ]]; then
+        # cygpath uses the active MSYS runtime, so custom Git installations and
+        # Unicode/space-containing paths resolve to this session's Bash.
+        __miniterm_bash_dir=$(command cygpath -u -- "$MINITERM_BASH_EXE")
+        __miniterm_bash_dir=${__miniterm_bash_dir%/*}
+        export PATH="$__miniterm_bash_dir:$PATH"
+        export CLAUDE_CODE_GIT_BASH_PATH=${CLAUDE_CODE_GIT_BASH_PATH:-$MINITERM_BASH_EXE}
+        export CLAUDE_CODE_USE_POWERSHELL_TOOL=${CLAUDE_CODE_USE_POWERSHELL_TOOL:-0}
+        builtin unset __miniterm_bash_dir
+    fi
     builtin source "$MINITERM_PROMPT_DIR/windows-bridge.bash"
 fi
 

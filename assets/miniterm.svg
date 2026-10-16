@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <title>MiniTerm · Terminal monogram</title>
+  <rect x="1.5" y="1.5" width="21" height="21" rx="6" fill="#18212F"/>
+  <path d="M5.5 17V7L12 12.5 18.5 7V17H14.5" stroke="#6ADABB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

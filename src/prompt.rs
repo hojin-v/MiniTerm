@@ -168,9 +168,7 @@ impl PromptFiles {
         &self.directory
     }
     pub fn install_windows_bridge(&self) -> Result<(), String> {
-        let Some(script) = crate::shell::codex_windows_bridge() else {
-            return Ok(());
-        };
+        let script = crate::shell::windows_shell_bridge();
         fs::write(self.directory.join("windows-bridge.bash"), script).map_err(|e| e.to_string())
     }
     pub fn update(&self, preferences: &PromptPreferences) -> Result<(), String> {

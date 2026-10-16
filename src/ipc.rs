@@ -43,6 +43,10 @@ pub enum Request {
     Event {
         event: AgentEvent,
     },
+    CodexEvent {
+        connection: String,
+        event: AgentEvent,
+    },
     Activate {
         session_id: String,
     },
@@ -55,10 +59,28 @@ pub enum Request {
         session_id: String,
         update: crate::progress::Update,
     },
+    PrepareCodex {
+        session_id: String,
+        home: std::path::PathBuf,
+        cwd: std::path::PathBuf,
+        environment: std::collections::BTreeMap<String, String>,
+    },
+    CodexPrepared {
+        session_id: String,
+        ticket: String,
+    },
+    CloseCodexLink {
+        session_id: String,
+        connection: String,
+    },
 }
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Reply {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preparation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_connection: Option<String>,
     pub ok: bool,
     pub sessions: Vec<String>,
     pub error: Option<String>,
@@ -82,6 +104,32 @@ pub struct Snapshot {
     pub ui: Option<std::collections::BTreeMap<String, [f32; 4]>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fixture_sample_ready: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_scroll: Option<TerminalScroll>,
+}
+/// Buffer metadata only, available in an isolated diagnostic instance.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalScroll {
+    pub win32_input: bool,
+    pub alternate_screen: bool,
+    pub mouse_reporting: bool,
+    pub history_lines: usize,
+    pub display_offset: usize,
+    pub wheel_events: usize,
+    pub last_wheel_delta: f32,
+    pub last_wheel_hovered: bool,
+    pub last_wheel_typed: bool,
+    pub focused: bool,
+    pub composing: bool,
+    pub enter_events: usize,
+    pub enter_encoded: usize,
+    pub last_enter_win32: bool,
+    pub last_enter_modifiers: [bool; 3],
+    pub last_text_frame: u64,
+    pub last_enter_frame: u64,
+    pub codex_ready: bool,
+    pub codex_writer_blocked: bool,
 }
 impl Reply {
     pub fn ok() -> Self {

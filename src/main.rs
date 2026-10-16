@@ -14,6 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("--register") => miniterm::notification::register(&exe)?,
         Some("--unregister") => miniterm::notification::unregister(&exe)?,
         Some("--cleanup") => {
+            miniterm::codex_bash::cleanup_user(&exe)?;
             let links = miniterm::integration::cleanup(&exe);
             let start = miniterm::native::autostart(&exe, false);
             let toast = miniterm::notification::unregister(&exe);
@@ -36,6 +37,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", serde_json::to_string(&reply)?);
         }
         Some("progress") => progress(&args[1..])?,
+        Some("codex-bash-server") => {
+            let split = args
+                .iter()
+                .position(|arg| arg == "--")
+                .ok_or("Executor launcher separator is missing")?;
+            let bash = args.get(1).ok_or("Bash path is missing")?;
+            let code = miniterm::codex_bash::serve(std::path::Path::new(bash), &args[split + 1..])?;
+            std::process::exit(code);
+        }
+        Some("codex-prepare") => {
+            if args.get(1).map(String::as_str) != Some("--") {
+                return Err("Codex launcher separator is missing".into());
+            }
+            miniterm::codex_bash::prepare_foreground(&args[2..])?;
+        }
+        Some("codex-detach") => {
+            if let (Ok(session_id), Some(connection)) =
+                (std::env::var("MINITERM_SESSION_ID"), args.get(1))
+            {
+                let _ = miniterm::ipc::send(&miniterm::ipc::Request::CloseCodexLink {
+                    session_id,
+                    connection: connection.clone(),
+                });
+            }
+        }
+        Some("codex-shell-config") => {
+            let split = args[1..]
+                .iter()
+                .position(|arg| arg == "--")
+                .ok_or("Codex launcher separator is missing")?
+                + 1;
+            match miniterm::agent_shell::codex_config(&args[1..split], &args[split + 1..]) {
+                Ok(Some(config)) => println!("{config}"),
+                Ok(None) => {}
+                Err(error) => {
+                    eprintln!("MiniTerm: Bash guidance unavailable: {error}. Use WSL Bash or MINITERM_AGENT_BASH=0 to use the original launcher.");
+                    std::process::exit(1);
+                }
+            }
+        }
         Some("codex-notify-override") => {
             // Lookup is optional and silent: configuration trouble must never
             // prevent Codex from starting with its original arguments.
@@ -78,6 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 _ => return Err("integrate codex|claude enable|disable".into()),
             };
             match args.get(1).map(String::as_str) {
+                Some("codex-bash") => miniterm::codex_bash::configure_user(&exe, enabled)?,
                 Some("codex") => miniterm::integration::configure_user(
                     miniterm::agent::Agent::Codex,
                     &exe,

@@ -1,4 +1,5 @@
 ﻿$ErrorActionPreference = 'Stop'
+& (Join-Path $PSScriptRoot 'generate-icon.ps1')
 & (Join-Path $PSScriptRoot 'cargo.ps1') -CargoArguments @('build','--release','--locked')
 $taskRoot = Split-Path -Parent $PSScriptRoot
 $taskArtifacts = Join-Path $taskRoot 'artifacts'

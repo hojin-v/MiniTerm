@@ -213,7 +213,7 @@ try {
     Get-Widget 'theme-light' | Out-Null
     Invoke-Probe 'diagnostic theme-light' | Out-Null; Start-Sleep -Milliseconds 180; Assert-Background @(245,247,250); Save-ProbeImage 'settings-light-live.png'
     Invoke-Probe 'diagnostic theme-dark' | Out-Null; Start-Sleep -Milliseconds 180; Assert-Background @(17,21,29); Save-ProbeImage 'settings-dark-live.png'
-    Invoke-Probe 'diagnostic settings-cancel' | Out-Null
+    Invoke-Probe 'diagnostic settings-close' | Out-Null
     $before=[MiniTermUxProbe]::Bounds($taskWindow)
     [MiniTermUxProbe]::SendMessage($taskWindow,561,[IntPtr]::Zero,[IntPtr]::Zero) | Out-Null
     [MiniTermUxProbe]::SetWindowPos($taskWindow,[IntPtr]::Zero,$before.Left+110,$before.Top+70,[int](680*$taskScale),[int](580*$taskScale),20) | Out-Null
@@ -229,7 +229,9 @@ try {
     Save-ProbeImage 'moved-expanded.png'
     if ($GlyphSample) {
         Invoke-Probe 'diagnostic sample-ui' | Out-Null
-        Start-Sleep -Milliseconds 350
+        # IPC acknowledges the action before Bash/ConPTY parses the fixed sample.
+        # Allow the asynchronous output to reach the capture; inspect images too.
+        Start-Sleep -Milliseconds 1000
         Save-ProbeImage 'tui-glyphs-dark.png'
         Invoke-Probe 'diagnostic theme-light' | Out-Null
         Start-Sleep -Milliseconds 180

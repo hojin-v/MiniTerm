@@ -14,6 +14,7 @@ use std::{
 };
 
 struct Harness {
+    console: pty::ConsoleHost,
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
@@ -46,6 +47,7 @@ impl Harness {
 
     fn spawn(profile: ShellProfile, id: &str, prompt: Option<&std::path::Path>) -> Self {
         let pty::OpenPty {
+            console,
             master,
             writer,
             mut reader,
@@ -62,6 +64,7 @@ impl Harness {
             }
         });
         Self {
+            console,
             master,
             writer,
             child,
@@ -117,6 +120,7 @@ impl Harness {
 }
 impl Drop for Harness {
     fn drop(&mut self) {
+        self.console.terminate();
         self.job.terminate();
         let _ = self.child.wait();
     }
@@ -182,6 +186,234 @@ fn git_windows_bridge_color_node_tty_and_codex_version() {
     drop(shell);
     drop(files);
     std::fs::remove_dir(root).unwrap();
+}
+
+#[test]
+#[ignore = "Requires Git Bash and native Codex; local SSE tool fixture, no model call"]
+fn git_agent_bash_executes_scripts_and_preserves_configuration() {
+    use miniterm::prompt::{PromptFiles, PromptPreferences};
+    let root = std::env::current_dir().unwrap().join(format!(
+        "artifacts/agent-bash 한글 ' {}",
+        uuid::Uuid::new_v4()
+    ));
+    let home = root.join("codex-home");
+    let work = root.join("work with spaces");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir(&work).unwrap();
+    std::fs::write(work.join("input 한글.txt"), "literal $() & ; 한글\n").unwrap();
+    let script = "set -e\n[[ -n $BASH_VERSION ]]\ntask_value=$(cat 'input 한글.txt')\n[[ $task_value == 'literal $() & ; 한글' ]]\nprintf '%s\\n' z a | sort | sed -n '1p' | grep -qx a\nread -r task_here <<'MINITERM_LITERAL'\nheredoc $() & ; 한글\nMINITERM_LITERAL\n[[ $task_here == 'heredoc $() & ; 한글' ]]\nprintf '__BASH_SCRIPT_OK__ %s\\n' \"$BASH_VERSION\"";
+    let fixture = responses_fixture::ResponsesFixture::start_shell(script, work.to_str().unwrap());
+    let mut config: toml_edit::DocumentMut = format!("model='miniterm-bash-fixture'\nmodel_provider='fixture'\napproval_policy='never'\nsandbox_mode='danger-full-access'\ncli_auth_credentials_store='file'\nweb_search='disabled'\nproject_root_markers=[]\nnotify=[]\ndeveloper_instructions='Keep the existing user instructions.'\n[model_providers.fixture]\nname='Local Bash fixture'\nbase_url='{}'\nwire_api='responses'\nrequires_openai_auth=false\nsupports_websockets=false\nrequest_max_retries=0\nstream_max_retries=0\n",fixture.address).parse().unwrap();
+    // Codex records first-use project trust itself. Seed this fixture so that
+    // its own CLI write cannot mask a mutation by the integration.
+    let current = std::env::current_dir().unwrap();
+    for project in std::iter::once(current.as_path())
+        .chain(current.ancestors().find(|path| path.join(".git").exists()))
+    {
+        let project = project.to_string_lossy().to_lowercase();
+        config["projects"][&project]["trust_level"] = toml_edit::value("trusted");
+    }
+    let config = config.to_string();
+    std::fs::write(
+        root.join("verification.json"),
+        b"{\"passed\":false,\"state\":\"incomplete\",\"modelCalled\":false}",
+    )
+    .unwrap();
+    std::fs::write(home.join("config.toml"), &config).unwrap();
+    std::fs::write(
+        home.join("custom.config.toml"),
+        "developer_instructions='Keep the profile instructions.'\n",
+    )
+    .unwrap();
+    let prompt = PromptFiles::create(
+        &root,
+        &PromptPreferences {
+            show_user: false,
+            show_host: false,
+            show_path: false,
+            symbol: "BASH>".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    prompt.install_windows_bridge().unwrap();
+    let mut shell = Harness::spawn(
+        git_test_profile(Some(work.clone())),
+        "agent-bash-fixture",
+        Some(prompt.directory()),
+    );
+    shell.until("BASH>");
+    let quote = |path: &std::path::Path| {
+        format!(
+            "'{}'",
+            path.to_string_lossy()
+                .replace('\\', "/")
+                .replace('\'', "'\\''")
+        )
+    };
+    let helper = std::path::Path::new(env!("CARGO_BIN_EXE_miniterm"));
+    shell.send(&format!("HISTFILE=/dev/null; HISTSIZE=0; unset OPENAI_API_KEY CODEX_API_KEY OPENAI_BASE_URL; export CODEX_HOME={}; export MINITERM_NOTIFY_EXE={}; MINITERM_AGENT_BASH=1 AI_BATTERY_WIN_LAYOUT=plain codex exec --strict-config --skip-git-repo-check --json 'Local Bash script fixture'; printf '__BASH_EXIT_%s__\\n' \"$?\"\r",quote(&home),quote(helper)));
+    let output = shell.until("BASH>");
+    std::fs::write(root.join("transcript.txt"), &output).unwrap();
+    assert!(output.contains("__BASH_EXIT_0__"), "{output:?}");
+    let captured = fixture.captured.lock().unwrap();
+    let first = captured
+        .first()
+        .expect("The installed Codex must call the local fixture");
+    let input = first["input"].to_string();
+    assert!(
+        input.contains("Keep the existing user instructions.")
+            && input.contains("<miniterm_shell>")
+            && input.contains("login=false"),
+        "Bash guidance or original instructions were lost"
+    );
+    let tool_outputs: Vec<_> = captured
+        .iter()
+        .flat_map(|request| request["input"].as_array().into_iter().flatten())
+        .filter(|item| item["type"] == "function_call_output")
+        .collect();
+    assert!(
+        tool_outputs
+            .iter()
+            .any(|item| item["output"].to_string().contains("__BASH_SCRIPT_OK__")),
+        "Bash tool did not execute the script: {tool_outputs:?}"
+    );
+    std::fs::write(
+        root.join("tool-output.json"),
+        serde_json::to_vec_pretty(&tool_outputs).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(home.join("config.toml")).unwrap(),
+        config
+    );
+    drop(captured);
+    // Inspect the effective profile through the same launch path without a task.
+    shell.send("MINITERM_AGENT_BASH=1 AI_BATTERY_WIN_LAYOUT=plain codex -p custom exec --strict-config --skip-git-repo-check --json 'Local profile Bash fixture'; printf '__PROFILE_BASH_EXIT_%s__\\n' \"$?\"\r");
+    let output = shell.until("BASH>");
+    std::fs::write(root.join("profile-transcript.txt"), &output).unwrap();
+    assert!(output.contains("__PROFILE_BASH_EXIT_0__"), "{output:?}");
+    let captured = fixture.captured.lock().unwrap();
+    assert!(
+        captured.iter().any(|request| {
+            let input = request["input"].to_string();
+            input.contains("Keep the profile instructions.") && input.contains("<miniterm_shell>")
+        }),
+        "Profile instructions were not retained"
+    );
+    drop(captured);
+    assert_eq!(
+        std::fs::read_to_string(home.join("custom.config.toml")).unwrap(),
+        "developer_instructions='Keep the profile instructions.'\n"
+    );
+    std::fs::write(root.join("verification.json"), serde_json::to_vec_pretty(&serde_json::json!({"passed":true,"codexBashScript":true,"originalInstructionsPreserved":true,"profileInstructionsPreserved":true,"configurationUnchanged":true,"modelCalled":false,"requests":fixture.captured.lock().unwrap().len()})).unwrap()).unwrap();
+    eprintln!("Bash fixture evidence: {}", root.display());
+}
+
+#[test]
+#[ignore = "Requires Git Bash and Node; mock official npm launcher, no model call"]
+fn git_agent_bash_npm_launcher_preserves_arguments_and_opt_out() {
+    use miniterm::prompt::{PromptFiles, PromptPreferences};
+    let root = std::env::current_dir()
+        .unwrap()
+        .join(format!("artifacts/agent-bash-npm-{}", uuid::Uuid::new_v4()));
+    let npm = root.join("npm path 한글 '");
+    let script = npm.join("node_modules/@openai/codex/bin/codex.js");
+    std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+    std::fs::write(
+        npm.join("codex.cmd"),
+        "@echo off\r\nrem Mock official npm launcher\r\n",
+    )
+    .unwrap();
+    std::fs::write(&script,r#"const readline = require('node:readline');
+const args = process.argv.slice(2);
+if (args.includes('app-server')) {
+  readline.createInterface({input:process.stdin}).on('line', line => {
+    const req = JSON.parse(line);
+    if (req.id === 1) console.log(JSON.stringify({id:1,result:{}}));
+    if (req.id === 2) console.log(JSON.stringify({id:2,result:{config:{developer_instructions:'Existing npm instructions: $() 한글'},origins:{}}}));
+  });
+} else {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) process.exit(12);
+  require('node:fs').writeFileSync(require('node:path').join(__dirname,'argv.json'),JSON.stringify({args,bash:process.env.CLAUDE_CODE_GIT_BASH_PATH,profile:process.env.MINITERM_BASH_EXE,powershell:process.env.CLAUDE_CODE_USE_POWERSHELL_TOOL}));
+  console.log('__NPM_LAUNCH_DONE__');
+  process.exit(7);
+}
+"#).unwrap();
+    let files = PromptFiles::create(
+        &root,
+        &PromptPreferences {
+            show_user: false,
+            show_host: false,
+            show_path: false,
+            symbol: "NPM>".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let previous = std::env::var_os("PATH").unwrap();
+    // Only bridge discovery sees the mock PATH; the running shell retains the
+    // real PATH. The generated launch uses absolute Node/script paths.
+    let mut paths = vec![npm.clone()];
+    paths.extend(std::env::split_paths(&previous));
+    std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
+    let installed = files.install_windows_bridge();
+    std::env::set_var("PATH", previous);
+    installed.unwrap();
+    let mut shell = Harness::spawn(
+        git_test_profile(Some(root.clone())),
+        "npm-bash-fixture",
+        Some(files.directory()),
+    );
+    shell.until("NPM>");
+    let helper = env!("CARGO_BIN_EXE_miniterm")
+        .replace('\\', "/")
+        .replace('\'', "'\\''");
+    shell.send(&format!("HISTFILE=/dev/null; HISTSIZE=0; export MINITERM_NOTIFY_EXE='{helper}'; MINITERM_AGENT_BASH=1 codex exec 'literal 한글 & ; $(touch never-created)' 'quote\"value' -c 'developer_instructions=explicit user' --disable unified_exec; printf '__NPM_EXIT_%s__\\n' \"$?\"\r"));
+    let output = shell.until("NPM>");
+    std::fs::write(root.join("transcript.txt"), &output).unwrap();
+    let recorded: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(script.parent().unwrap().join("argv.json")).unwrap())
+            .unwrap();
+    let args: Vec<String> = serde_json::from_value(recorded["args"].clone()).unwrap();
+    assert!(args
+        .iter()
+        .any(|arg| arg.contains("Existing npm instructions:") && arg.contains("<miniterm_shell>")));
+    assert!(args.contains(&"--no-daemon".into()));
+    assert!(args.contains(&"features.unified_exec=true".into()));
+    assert_eq!(
+        &args[args.len() - 7..],
+        [
+            "exec",
+            "literal 한글 & ; $(touch never-created)",
+            "quote\"value",
+            "-c",
+            "developer_instructions=explicit user",
+            "--disable",
+            "unified_exec"
+        ]
+    );
+    assert!(output.contains("__NPM_EXIT_7__"), "{output:?}");
+    assert!(!root.join("never-created").exists());
+    assert_eq!(recorded["bash"], recorded["profile"]);
+    assert_eq!(recorded["powershell"], "0");
+    std::fs::write(
+        root.join("launch.json"),
+        serde_json::to_vec_pretty(&recorded).unwrap(),
+    )
+    .unwrap();
+    shell.send(
+        "MINITERM_AGENT_BASH=0 codex exec 'original argv'; printf '__OPTOUT_EXIT_%s__\\n' \"$?\"\r",
+    );
+    let output = shell.until("NPM>");
+    let recorded: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(script.parent().unwrap().join("argv.json")).unwrap())
+            .unwrap();
+    let args: Vec<String> = serde_json::from_value(recorded["args"].clone()).unwrap();
+    assert_eq!(args, ["--no-alt-screen", "exec", "original argv"]);
+    assert!(output.contains("__OPTOUT_EXIT_7__"));
+    std::fs::write(root.join("verification.json"),b"{\"passed\":true,\"npmLauncher\":true,\"literalArguments\":true,\"tty\":true,\"exitCode\":true,\"claudeBashEnvironment\":true,\"optOut\":true}").unwrap();
+    eprintln!("npm Bash fixture evidence: {}", root.display());
 }
 
 #[test]
@@ -299,10 +531,12 @@ fn git_codex_notify_rebinds_helper_and_preserves_original_callback() {
         )
     };
     let helper = std::path::Path::new(env!("CARGO_BIN_EXE_miniterm"));
-    shell.send(&format!("HISTFILE=/dev/null; HISTSIZE=0; unset OPENAI_API_KEY CODEX_API_KEY OPENAI_BASE_URL; export CODEX_HOME={}; export MINITERM_NOTIFY_EXE={}; if __fixture_notify=$(command \"$MINITERM_NOTIFY_EXE\" codex-notify-override --no-daemon exec) && [[ -n $__fixture_notify ]]; then printf '__N''OTIFY_LOOKUP_OK__\\n'; fi; AI_BATTERY_WIN_LAYOUT=plain codex --no-daemon exec --strict-config --skip-git-repo-check --json 'Local notification fixture'; printf '__N''OTIFY_EXIT_%s__\\n' \"$?\"\r", quote(&home), quote(helper)));
+    shell.send(&format!("HISTFILE=/dev/null; HISTSIZE=0; unset OPENAI_API_KEY CODEX_API_KEY OPENAI_BASE_URL; export CODEX_HOME={}; export MINITERM_NOTIFY_EXE={}; if __fixture_notify=$(command \"$MINITERM_NOTIFY_EXE\" codex-notify-override --no-daemon exec) && [[ -n $__fixture_notify ]]; then printf '__N''OTIFY_LOOKUP_OK__\\n'; fi; MINITERM_CODEX_SESSION_NOTIFY=1 AI_BATTERY_WIN_LAYOUT=plain codex --no-daemon exec --strict-config --skip-git-repo-check --json 'Local notification fixture'; printf '__N''OTIFY_EXIT_%s__\\n' \"$?\"\r", quote(&home), quote(helper)));
     let output = shell.until("__NOTIFY_EXIT_0__");
     assert!(
-        output.contains("__LOCAL_CODEX_NOTIFY_COMPLETED__"),
+        // The notification check needs a completed turn, independent of
+        // ConPTY wrapping the longer response marker with cursor sequences.
+        output.contains("\"type\":\"turn.completed\""),
         "{output:?}"
     );
     assert!(
@@ -321,10 +555,13 @@ fn git_codex_notify_rebinds_helper_and_preserves_original_callback() {
         thread::sleep(Duration::from_millis(20));
     }
     shell.until("NOTIFY>");
-    shell.send("AI_BATTERY_WIN_LAYOUT=plain codex --no-daemon -c 'notify=[]' exec --strict-config --skip-git-repo-check --json 'Local disabled-notify fixture'; printf '__D''ISABLED_EXIT_%s__\\n' \"$?\"\r");
+    shell.send("MINITERM_CODEX_SESSION_NOTIFY=1 AI_BATTERY_WIN_LAYOUT=plain codex --no-daemon -c 'notify=[]' exec --strict-config --skip-git-repo-check --json 'Local disabled-notify fixture'; printf '__D''ISABLED_EXIT_%s__\\n' \"$?\"\r");
     let disabled = shell.until("__DISABLED_EXIT_0__");
     assert!(
-        disabled.contains("__LOCAL_CODEX_NOTIFY_COMPLETED__"),
+        // ConPTY can wrap the message text with cursor movement sequences.
+        // The JSON turn event and exit marker prove completion independently
+        // of where the terminal places the response text.
+        disabled.contains("\"type\":\"turn.completed\""),
         "{disabled:?}"
     );
     shell.until("NOTIFY>");
@@ -335,10 +572,10 @@ fn git_codex_notify_rebinds_helper_and_preserves_original_callback() {
     }
     profile["notify"] = toml_edit::value(profile_notify);
     std::fs::write(home.join("custom.config.toml"), profile.to_string()).unwrap();
-    shell.send("AI_BATTERY_WIN_LAYOUT=plain codex --no-daemon --profile custom exec --strict-config --skip-git-repo-check --json 'Local profile-notify fixture'; printf '__P''ROFILE_EXIT_%s__\\n' \"$?\"\r");
+    shell.send("MINITERM_CODEX_SESSION_NOTIFY=1 AI_BATTERY_WIN_LAYOUT=plain codex --no-daemon --profile custom exec --strict-config --skip-git-repo-check --json 'Local profile-notify fixture'; printf '__P''ROFILE_EXIT_%s__\\n' \"$?\"\r");
     let profile_output = shell.until("__PROFILE_EXIT_0__");
     assert!(
-        profile_output.contains("__LOCAL_CODEX_NOTIFY_COMPLETED__"),
+        profile_output.contains("\"type\":\"turn.completed\""),
         "{profile_output:?}"
     );
     shell.until("NOTIFY>");
@@ -347,10 +584,10 @@ fn git_codex_notify_rebinds_helper_and_preserves_original_callback() {
         "model = 'miniterm-notify-fixture'\n",
     )
     .unwrap();
-    shell.send("AI_BATTERY_WIN_LAYOUT=plain codex --no-daemon --profile inherit exec --strict-config --skip-git-repo-check --json 'Local inherited-notify fixture'; printf '__I''NHERIT_EXIT_%s__\\n' \"$?\"\r");
+    shell.send("MINITERM_CODEX_SESSION_NOTIFY=1 AI_BATTERY_WIN_LAYOUT=plain codex --no-daemon --profile inherit exec --strict-config --skip-git-repo-check --json 'Local inherited-notify fixture'; printf '__I''NHERIT_EXIT_%s__\\n' \"$?\"\r");
     let inherited_output = shell.until("__INHERIT_EXIT_0__");
     assert!(
-        inherited_output.contains("__LOCAL_CODEX_NOTIFY_COMPLETED__"),
+        inherited_output.contains("\"type\":\"turn.completed\""),
         "{inherited_output:?}"
     );
     shell.until("NOTIFY>");
@@ -794,4 +1031,96 @@ fn wsl_home_environment_resize_job_control_and_windows_interop() {
     shell.until("__MINITERM_PROMPT__");
     shell.send("printf '__INTERRUPT''_OK__\\n'\r");
     shell.until("__INTERRUPT_OK__");
+}
+
+#[test]
+#[ignore = "Requires MINITERM_WSL_TEST_DISTRO; launches WSL from an actual Git Bash ConPTY"]
+fn wsl_invoked_from_git_bash_keeps_an_interactive_terminal() {
+    let distribution = std::env::var("MINITERM_WSL_TEST_DISTRO").unwrap();
+    let root = std::env::temp_dir().join(format!("MiniTerm WSL bridge {}", uuid::Uuid::new_v4()));
+    let files = miniterm::prompt::PromptFiles::create(&root, &Default::default()).unwrap();
+    files.install_windows_bridge().unwrap();
+    let mut shell = Harness::spawn(
+        git_test_profile(None),
+        "nested-wsl",
+        Some(files.directory()),
+    );
+    shell.send("HISTFILE=/dev/null; HISTSIZE=0; PS1='__MINI''TERM_PROMPT__ '; PROMPT_COMMAND=; printf '__MINI''TERM_READY__\\n'\r");
+    shell.until("__MINITERM_READY__");
+    shell.until("__MINITERM_PROMPT__");
+    // Exercise the same bare command users enter, retaining their default distro.
+    shell.send("wsl\r");
+    thread::sleep(Duration::from_millis(300));
+    shell.send("[[ -n $WSL_DISTRO_NAME && -t 0 && -t 1 ]] && printf '__NESTED''_WSL_TTY__\\n'; printf '__NESTED''_WSL_DONE__\\n'\r");
+    let output = shell.until("__NESTED_WSL_DONE__");
+    assert!(output.contains("__NESTED_WSL_TTY__"), "{output:?}");
+    shell.send("exit\r");
+    shell.until("__MINITERM_PROMPT__");
+    shell.send(&format!("wsl --distribution '{distribution}' --cd /tmp --exec /bin/bash -c '[[ $PWD == /tmp ]] && printf \"__LINUX_PATH_OK__\\n\"'; printf '__PATH''_PROBE_DONE__\\n'\r"));
+    let output = shell.until("__PATH_PROBE_DONE__");
+    assert!(
+        output.contains("__LINUX_PATH_OK__\r") || output.contains("__LINUX_PATH_OK__\n"),
+        "Linux paths must reach WSL unchanged: {output:?}"
+    );
+    shell.until("__MINITERM_PROMPT__");
+    shell.send(&format!("wsl.exe --distribution '{distribution}' --cd /tmp --exec /bin/pwd; printf '__EXE''_PATH_DONE__\\n'\r"));
+    let output = shell.until("__EXE_PATH_DONE__");
+    assert!(
+        output.contains("\r/tmp\r") || output.contains("\n/tmp\r") || output.contains("\n/tmp\n"),
+        "wsl.exe must also preserve Linux paths: {output:?}"
+    );
+    shell.until("__MINITERM_PROMPT__");
+    shell.send("wsl() { printf '__USER''_WSL_FUNCTION__\\n'; }; builtin source \"$MINITERM_PROMPT_DIR/windows-bridge.bash\"; wsl; printf '__USER''_BRIDGE_DONE__\\n'\r");
+    let output = shell.until("__USER_BRIDGE_DONE__");
+    assert!(
+        output.contains("__USER_WSL_FUNCTION__"),
+        "Existing user functions must survive bridge installation: {output:?}"
+    );
+    drop(shell);
+    drop(files);
+    let _ = std::fs::remove_dir(root);
+}
+
+#[test]
+#[ignore = "Requires installed Git Bash; observes production Session process exit"]
+fn git_session_exit_is_observed_without_additional_input() {
+    use alacritty_terminal::{
+        grid::Dimensions,
+        index::{Column, Line},
+    };
+    let session =
+        miniterm::terminal::Session::start(git_test_profile(None), 1000, egui::Context::default())
+            .unwrap();
+    // A marker separates startup processing from the actual exit command.
+    session
+        .input
+        .send(b"printf '__SESSION''_READY__\\n'\r".to_vec())
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let ready = {
+            let term = session.term.lock();
+            (0..term.screen_lines()).any(|line| {
+                (0..term.columns())
+                    .map(|col| term.grid()[Line(line as i32)][Column(col)].c)
+                    .collect::<String>()
+                    .contains("__SESSION_READY__")
+            })
+        };
+        if ready {
+            break;
+        }
+        assert!(Instant::now() < deadline, "Bash startup did not finish");
+        thread::sleep(Duration::from_millis(20));
+    }
+    session.input.send(b"exit\r".to_vec()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !session.exited.load(std::sync::atomic::Ordering::Acquire) {
+        assert!(
+            Instant::now() < deadline,
+            "logout must complete the session without another input"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(session.error.lock().unwrap().is_none());
 }

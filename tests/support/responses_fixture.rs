@@ -1,11 +1,11 @@
 //! Local deterministic SSE transport fixture. It never calls a model service.
-use serde_json::json;
+use serde_json::{json, Value};
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     thread::{self, JoinHandle},
     time::Duration,
@@ -14,15 +14,29 @@ use std::{
 pub struct ResponsesFixture {
     pub address: String,
     pub requests: Arc<AtomicUsize>,
+    pub captured: Arc<Mutex<Vec<Value>>>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
 impl ResponsesFixture {
     pub fn start(text: &str) -> Self {
+        Self::start_inner(text, None)
+    }
+    pub fn start_shell(command: &str, workdir: &str) -> Self {
+        Self::start_inner(
+            "__BASH_FIXTURE_COMPLETED__",
+            Some(
+                json!({"cmd":command,"workdir":workdir,"shell":"bash","login":false,"max_output_tokens":2000}),
+            ),
+        )
+    }
+    fn start_inner(text: &str, shell: Option<Value>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = format!("http://{}/v1", listener.local_addr().unwrap());
         let requests = Arc::new(AtomicUsize::new(0));
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let worker_captured = captured.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let worker_requests = requests.clone();
         let worker_stop = stop.clone();
@@ -43,14 +57,20 @@ impl ResponsesFixture {
                     Ok((stream, _)) => {
                         let requests = worker_requests.clone();
                         let text = text.clone();
+                        let shell = shell.clone();
+                        let captured = worker_captured.clone();
                         // An idle preconnected socket must not block a different
                         // connection carrying the actual SSE request.
-                        clients.push(thread::spawn(move || match serve(stream, &text) {
-                            Ok(true) => {
-                                requests.fetch_add(1, Ordering::Release);
+                        clients.push(thread::spawn(move || {
+                            match serve(stream, &text, shell.as_ref(), &captured) {
+                                Ok(true) => {
+                                    requests.fetch_add(1, Ordering::Release);
+                                }
+                                Ok(false) => {}
+                                Err(error) => {
+                                    eprintln!("Local SSE fixture transport error: {error}")
+                                }
                             }
-                            Ok(false) => {}
-                            Err(error) => eprintln!("Local SSE fixture transport error: {error}"),
                         }));
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -66,6 +86,7 @@ impl ResponsesFixture {
         Self {
             address,
             requests,
+            captured,
             stop,
             worker: Some(worker),
         }
@@ -99,7 +120,12 @@ impl Drop for ResponsesFixture {
         }
     }
 }
-fn serve(mut stream: TcpStream, text: &str) -> std::io::Result<bool> {
+fn serve(
+    mut stream: TcpStream,
+    text: &str,
+    shell: Option<&Value>,
+    captured: &Mutex<Vec<Value>>,
+) -> std::io::Result<bool> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let mut bytes = Vec::new();
@@ -141,19 +167,44 @@ fn serve(mut stream: TcpStream, text: &str) -> std::io::Result<bool> {
         )?;
         return Ok(false);
     }
-    // Input bodies are drained and discarded, never logged or forwarded.
+    // Only the isolated Bash fixture captures bodies; normal notification
+    // fixtures still drain and discard them. Nothing is forwarded to a service.
+    let tool_call = if let Some(shell) = shell {
+        let request: Value = serde_json::from_slice(&bytes[header_end..header_end + length])?;
+        let has_result = request
+            .get("input")
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items.iter().any(|item| {
+                    item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                })
+            });
+        captured.lock().unwrap().push(request);
+        (!has_result).then(|| json!({"id":"fc_bash_fixture","type":"function_call","call_id":"call_bash_fixture","name":"exec_command","arguments":shell.to_string(),"status":"completed"}))
+    } else {
+        None
+    };
     let part = json!({"type":"output_text","text":text,"annotations":[],"logprobs":[]});
     let item = json!({"id":"msg_miniterm_fixture","type":"message","role":"assistant","status":"completed","content":[part]});
-    let events = [
-        json!({"type":"response.created","response":{"id":"resp_miniterm_fixture","object":"response","created_at":1791695400,"model":"miniterm-notify-fixture","status":"in_progress","output":[]}}),
-        json!({"type":"response.output_item.added","output_index":0,"item":{"id":"msg_miniterm_fixture","type":"message","role":"assistant","status":"in_progress","content":[]}}),
-        json!({"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"msg_miniterm_fixture","part":{"type":"output_text","text":"","annotations":[],"logprobs":[]}}),
-        json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"msg_miniterm_fixture","delta":text,"logprobs":[]}),
-        json!({"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"msg_miniterm_fixture","text":text,"logprobs":[]}),
-        json!({"type":"response.content_part.done","output_index":0,"content_index":0,"item_id":"msg_miniterm_fixture","part":part}),
-        json!({"type":"response.output_item.done","output_index":0,"item":item}),
-        json!({"type":"response.completed","response":{"id":"resp_miniterm_fixture","object":"response","created_at":1791695400,"model":"miniterm-notify-fixture","status":"completed","output":[item],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}),
-    ];
+    let events = if let Some(item) = tool_call {
+        vec![
+            json!({"type":"response.created","response":{"id":"resp_bash_fixture","object":"response","status":"in_progress","output":[]}}),
+            json!({"type":"response.output_item.added","output_index":0,"item":item}),
+            json!({"type":"response.output_item.done","output_index":0,"item":item}),
+            json!({"type":"response.completed","response":{"id":"resp_bash_fixture","object":"response","status":"completed","output":[item],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}),
+        ]
+    } else {
+        vec![
+            json!({"type":"response.created","response":{"id":"resp_miniterm_fixture","object":"response","created_at":1791695400,"model":"miniterm-notify-fixture","status":"in_progress","output":[]}}),
+            json!({"type":"response.output_item.added","output_index":0,"item":{"id":"msg_miniterm_fixture","type":"message","role":"assistant","status":"in_progress","content":[]}}),
+            json!({"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"msg_miniterm_fixture","part":{"type":"output_text","text":"","annotations":[],"logprobs":[]}}),
+            json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"msg_miniterm_fixture","delta":text,"logprobs":[]}),
+            json!({"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"msg_miniterm_fixture","text":text,"logprobs":[]}),
+            json!({"type":"response.content_part.done","output_index":0,"content_index":0,"item_id":"msg_miniterm_fixture","part":part}),
+            json!({"type":"response.output_item.done","output_index":0,"item":item}),
+            json!({"type":"response.completed","response":{"id":"resp_miniterm_fixture","object":"response","created_at":1791695400,"model":"miniterm-notify-fixture","status":"completed","output":[item],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}),
+        ]
+    };
     let mut body = String::new();
     for (sequence, mut event) in events.into_iter().enumerate() {
         event["sequence_number"] = json!(sequence);

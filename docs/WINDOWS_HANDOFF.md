@@ -1,5 +1,7 @@
 # MiniTerm Windows 개발 인수인계 및 성능 계획
 
+> 이 문서는 초기 환경 전환과 성능 계획의 역사 기록이다. 현재 환경·배포·작업 범위는 [SESSION_HANDOFF.md](SESSION_HANDOFF.md)를 먼저 확인한다. 아래 WSL 작업 위치·미구현 상태는 2026-10-10 당시 관찰이다.
+
 작성/수정: 2026-10-10 · P0 구현 진행 · 상위 계획: [PLAN.md](PLAN.md)
 
 **현재 구현 기준:** 초기 Tauri/WebView2/xterm.js 제안은 사용자 성능 요구에 따라 **Rust 네이티브 egui/eframe + wgpu(DX12) + Alacritty VT 코어 + ConPTY**로 대체했다. 아래 Tauri/Node/WebView2 준비 항목은 초기 환경 조사 기록이다. 현재 Windows 빌드에는 Rust/MSVC/Windows SDK가 필요하며, Node와 WebView2는 필요하지 않다. 작업 기준 사본은 Windows NTFS의 `C:\path\to\MiniTerm`이다. 실제 진행 상태는 [IMPLEMENTATION.md](IMPLEMENTATION.md), 최신 성능 설계는 [PERFORMANCE.md](PERFORMANCE.md)를 확인한다.

@@ -80,6 +80,7 @@ pub struct Summary {
     pub plan: Option<Plan>,
     pub battery_row: Option<i32>,
     pub battery_text: Option<String>,
+    pub battery_columns: Option<usize>,
     pub reported: Option<crate::progress::Record>,
 }
 
@@ -100,6 +101,7 @@ struct TextRow {
     line: i32,
     text: String,
     wrapped: bool,
+    columns_used: usize,
 }
 
 /// Read a bounded part of the existing VT grid; no quota requests, transcript
@@ -109,6 +111,7 @@ pub fn summarize<T: EventListener>(term: &Term<T>) -> Summary {
     let rows: Vec<TextRow> = (start..term.screen_lines() as i32)
         .map(|line| {
             let mut text = String::new();
+            let mut columns_used = 0;
             for col in 0..term.columns().min(512) {
                 let cell = &term.grid()[Line(line)][Column(col)];
                 if cell.flags.intersects(
@@ -117,6 +120,9 @@ pub fn summarize<T: EventListener>(term: &Term<T>) -> Summary {
                     continue;
                 }
                 text.push(cell.c);
+                if cell.c != ' ' {
+                    columns_used = col + 1 + usize::from(cell.flags.contains(Flags::WIDE_CHAR));
+                }
                 if let Some(extra) = cell.zerowidth() {
                     text.extend(extra);
                 }
@@ -132,6 +138,7 @@ pub fn summarize<T: EventListener>(term: &Term<T>) -> Summary {
                     text.trim_end().to_owned()
                 },
                 wrapped,
+                columns_used,
             }
         })
         .collect();
@@ -152,6 +159,7 @@ pub fn summarize<T: EventListener>(term: &Term<T>) -> Summary {
         if summary.battery_row.is_none() && battery(text) {
             summary.battery_row = Some(row.line);
             summary.battery_text = Some(text.to_owned());
+            summary.battery_columns = Some(row.columns_used);
         }
         if summary.activity.is_none()
             && prompt.is_none_or(|prompt| index > prompt)
@@ -467,6 +475,11 @@ pub fn preview_rows<T: EventListener>(term: &Term<T>, count: usize, input: bool)
     if count == 0 {
         return Vec::new();
     }
+    let offset = term.grid().display_offset();
+    if offset > 0 {
+        let end = term.screen_lines() as i32 - offset as i32;
+        return (end - count.min(term.screen_lines()) as i32..end).collect();
+    }
     let cursor = term
         .grid()
         .cursor
@@ -528,6 +541,14 @@ mod tests {
         let mut processor: Processor = Processor::new();
         processor.advance(&mut term, text.as_bytes());
         term
+    }
+    #[test]
+    fn battery_extent_uses_terminal_cells_including_indent_and_wide_glyphs() {
+        let summary = summarize(&screen("  Codex ❚❚ 67% | 한글\r\n", 100, 24));
+        // 17 single-column cells and two double-column Hangul cells. Font
+        // fallback advances must not decide whether this VT row is clipped.
+        assert_eq!(summary.battery_columns, Some(21));
+        assert_eq!(summary.battery_text.as_deref(), Some("Codex ❚❚ 67% | 한글"));
     }
     #[test]
     fn summary_uses_actual_battery_below_cursor_and_filters_codex_footer() {
@@ -664,5 +685,25 @@ mod tests {
         assert_eq!((term.columns(), term.screen_lines()), (80, 24));
         assert_eq!(horizontal_start(79, 30, 80), 50);
         assert_eq!(horizontal_start(8, 30, 80), 0);
+    }
+
+    #[test]
+    fn compact_input_scrolls_output_without_moving_the_live_cursor() {
+        let mut term = screen("", 40, 4);
+        let mut processor: Processor = Processor::new();
+        for line in 0..20 {
+            processor.advance(&mut term, format!("line-{line:02}\r\n").as_bytes());
+        }
+        let cursor = term.grid().cursor.point;
+        let live_rows = preview_rows(&term, 2, true);
+        term.scroll_display(alacritty_terminal::grid::Scroll::Delta(6));
+        let rows = preview_rows(&term, 2, true);
+        let text: String = (0..term.columns())
+            .map(|col| term.grid()[Line(rows[0])][Column(col)].c)
+            .collect();
+        assert!(text.starts_with("line-13"), "{text}");
+        assert_eq!(term.grid().cursor.point, cursor);
+        term.scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+        assert_eq!(preview_rows(&term, 2, true), live_rows);
     }
 }

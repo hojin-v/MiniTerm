@@ -16,6 +16,8 @@ Unicode true
   !define RUNTIME_DLL_NAME "VCRUNTIME140.dll"
 !endif
 Name "MiniTerm ${RELEASE_LABEL}"
+!define MUI_ICON "..\assets\miniterm.ico"
+!define MUI_UNICON "..\assets\miniterm.ico"
 OutFile "${ARTIFACTS}\MiniTerm-${RELEASE_LABEL}-windows-x64-setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\MiniTerm"
 InstallDirRegKey HKCU "Software\MiniTerm" "InstallDir"
@@ -100,6 +102,7 @@ Section "MiniTerm" Main
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   WriteRegStr HKCU "Software\MiniTerm" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniTerm" "DisplayName" "MiniTerm"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniTerm" "DisplayIcon" '"$INSTDIR\miniterm.exe",0'
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniTerm" "DisplayVersion" "${RELEASE_LABEL}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniTerm" "Publisher" "Hnode"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiniTerm" "InstallLocation" "$INSTDIR"
