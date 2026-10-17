@@ -188,6 +188,8 @@ Section "MiniTerm" Main
   File "${ARTIFACTS}\BUNDLED_RUNTIME.md"
   SetOutPath "$INSTDIR\runtime\git"
   File /r "${ARTIFACTS}\runtime\git\*.*"
+  CreateDirectory "$INSTDIR\runtime\git\dev\shm"
+  CreateDirectory "$INSTDIR\runtime\git\dev\mqueue"
   SetOutPath "$INSTDIR"
 !endif
   WriteUninstaller "$INSTDIR\Uninstall.exe"

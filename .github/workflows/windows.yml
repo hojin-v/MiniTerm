@@ -16,7 +16,16 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        id: runtime-cache
+        with:
+          key: msys-source-v1-${{ runner.os }}-${{ hashFiles('runtime/BASH_RUNTIME.json', 'docs/patches/msys-resize-signal-after-discard.patch', 'scripts/build-bash-runtime.py', 'docs/BUNDLED_RUNTIME.md') }}
+          path: |
+            artifacts/runtime-build/msys-2.0.dll
+            artifacts/runtime-build/BUILD_RECEIPT.json
+            artifacts/runtime-build/MiniTerm-msys-3.6.10-source.tar.gz
       - name: Build private Bash runtime from pinned source
+        if: steps.runtime-cache.outputs.cache-hit != 'true'
         run: python scripts/build-bash-runtime.py
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:

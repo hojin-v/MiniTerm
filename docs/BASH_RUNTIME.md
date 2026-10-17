@@ -1,5 +1,7 @@
 # 전용 Bash 런타임 적용 진행
 
+> 2026-10-17 배포 후속: alpha.8은 PortableGit 2.56.0(2)와 최신 공식 MSYS 소스에 입력 수정을 적용한 전용 런타임을 포함한다. 소스 고정·빌드·배포 검사 기준은 [BUNDLED_RUNTIME.md](BUNDLED_RUNTIME.md)를 따른다. 아래 Git 2.50.1 후보와 비번들 설명은 이전 실험의 이력이다.
+
 > 2026-10-14 Windows Codex 후속: 공유 서버를 프런트엔드보다 먼저 준비하고 공식 exec-server 기반 Git Bash 기본 환경을 제공한다. 전용 MSYS 런타임의 배포와 별개인 변경이다. [실행 순서·등록 범위·알림 한계](../feature/CODEX_STARTUP.md), [최신 검증](../feature/CODEX_RECOVERY_HANDOFF.md)을 따른다.
 
 2026-10-12. 제품의 기본 프로필에 전용 Bash 자동 선택 경로를 구현하고 개발용 구성에서 검증했다. 공개 alpha.6에는 선택·검증 코드가 포함됐지만 수정 MSYS DLL·PortableGit은 번들하지 않는다. 현재 후보는 입력 누락 조사에 사용한 Git 2.50.1이며 공개 배포 승인 상태가 아니다. 현재 기준과 후속 Unicode 경로 검증은 [SESSION_HANDOFF.md](SESSION_HANDOFF.md)를 참고한다.

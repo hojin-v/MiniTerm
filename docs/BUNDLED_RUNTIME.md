@@ -37,7 +37,7 @@ Its source repositories and package recipes are available through
 https://github.com/git-for-windows/git and
 https://github.com/git-for-windows/MSYS2-packages, with MSYS2 package sources at
 https://repo.msys2.org/msys/sources/ and https://repo.msys2.org/mingw/sources/.
-The package includes a source offer and exact package inventory.
+The exact package inventory and upstream license texts are retained.
 
 Release gates require every bundled Session/ConPTY compatibility check to
 pass, default-profile selection, Windows bridge and agent integration checks,

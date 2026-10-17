@@ -3,6 +3,7 @@ $taskRoot = Split-Path -Parent $PSScriptRoot
 $taskMetadata = & (Join-Path $PSScriptRoot 'cargo.ps1') -CargoArguments @('metadata','--locked','--format-version','1','--filter-platform','x86_64-pc-windows-msvc') | ConvertFrom-Json
 $taskParts = New-Object System.Collections.Generic.List[string]
 $taskParts.Add('<!doctype html><meta charset="utf-8"><title>MiniTerm third-party notices</title><style>body{font:15px system-ui;margin:3rem;max-width:70rem}pre{white-space:pre-wrap}summary{cursor:pointer}</style><h1>MiniTerm third-party notices</h1><p>Locked Windows dependency metadata and licenses distributed in each crate. Build tools and dependencies may be included conservatively.</p>')
+$taskParts.Add('<h2>Private Bash runtime</h2><p>PortableGit 2.56.0(2) includes Git, Bash, MSYS2 and other projects under their respective licenses, including GPL and LGPL. See runtime/git/LICENSE.txt, runtime/git/usr/share/licenses, runtime/git/ucrt64/share/licenses and runtime/git/etc/package-versions.txt. MiniTerm changes msys-2.0.dll to preserve input during console resize. Complete modified runtime source and build controls are supplied as MiniTerm-msys-3.6.10-source.tar.gz on the same release page. See BUNDLED_RUNTIME.md and runtime/git/MINITERM_SOURCES.md.</p>')
 $taskMissing = New-Object System.Collections.Generic.List[string]
 $taskSupplement = Get-Content (Join-Path $taskRoot 'licenses/SOURCES.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 foreach ($taskPackage in ($taskMetadata.packages | Sort-Object name,version)) {
