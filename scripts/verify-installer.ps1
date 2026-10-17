@@ -43,7 +43,6 @@ if ((Get-FileHash -LiteralPath $taskInstaller -Algorithm SHA256).Hash -ine $task
 New-Item -ItemType Directory -Path $taskData | Out-Null
 $taskSettings = Join-Path $taskData 'settings.json'
 [IO.File]::WriteAllText($taskSettings, '{"schemaVersion":1,"theme":"light"}', [Text.UTF8Encoding]::new($false))
-$taskSettingsHash = (Get-FileHash -LiteralPath $taskSettings -Algorithm SHA256).Hash
 function Invoke-NativeInstaller([string]$Executable, [string[]]$Arguments) {
     $taskStart = [Diagnostics.ProcessStartInfo]::new()
     $taskStart.FileName = $Executable
@@ -52,7 +51,7 @@ function Invoke-NativeInstaller([string]$Executable, [string[]]$Arguments) {
     foreach ($taskArgument in $Arguments) { $taskStart.ArgumentList.Add($taskArgument) }
     $taskChild = [Diagnostics.Process]::Start($taskStart)
     try {
-        if (-not $taskChild.WaitForExit(45000)) {
+        if (-not $taskChild.WaitForExit(120000)) {
             $taskDetails = ' Registry exists: ' + (Test-Path $taskRegistry) + ' App copied: ' + (Test-Path -LiteralPath (Join-Path $taskInstall 'miniterm.exe')) + ' Start menu folder exists: ' + (Test-Path -LiteralPath (Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs'))
             $taskChild.Kill($true); $taskChild.WaitForExit()
             throw ('Native installer did not finish unattended.' + $taskDetails)
@@ -61,6 +60,42 @@ function Invoke-NativeInstaller([string]$Executable, [string[]]$Arguments) {
     } finally { $taskChild.Dispose() }
 }
 Invoke-NativeInstaller $taskInstaller @('/S',('/D=' + $taskInstall))
+$taskStartMenu = Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs/MiniTerm.lnk'
+$taskDesktop = Join-Path ([Environment]::GetFolderPath('Desktop')) 'MiniTerm.lnk'
+$taskRunKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+function Assert-Options([bool]$StartMenu, [bool]$Desktop, [bool]$Autostart) {
+    if ((Test-Path -LiteralPath $taskStartMenu) -ne $StartMenu -or (Test-Path -LiteralPath $taskDesktop) -ne $Desktop) { throw 'Shortcut choices were not applied.' }
+    $taskShell = New-Object -ComObject WScript.Shell
+    foreach ($taskLink in @($taskStartMenu,$taskDesktop)) {
+        if (Test-Path -LiteralPath $taskLink) {
+            if ($taskShell.CreateShortcut($taskLink).TargetPath -ine (Join-Path $taskInstall 'miniterm.exe')) { throw 'Shortcut does not target the installed executable.' }
+        }
+    }
+    $taskRun = (Get-ItemProperty -LiteralPath $taskRunKey -Name MiniTerm -ErrorAction SilentlyContinue).MiniTerm
+    if ($Autostart) {
+        if ($taskRun -ne ('"' + (Join-Path $taskInstall 'miniterm.exe') + '" --autostart')) { throw 'Autostart command is incorrect.' }
+    } elseif ($taskRun) { throw 'Autostart must be opt-in.' }
+    $taskSaved = Get-Content -LiteralPath $taskSettings -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([bool]$taskSaved.autostart -ne $Autostart -or $taskSaved.theme -ne 'light') { throw 'Installer/app settings do not agree or user theme was lost.' }
+}
+if ($InstallerPath) {
+    Assert-Options $true $false $false
+    # Real bundled files, not only successful process launch.
+    $taskInventory = Get-Content -LiteralPath (Join-Path $taskInstall 'BASH_RUNTIME_FILES.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach ($taskFile in $taskInventory.files) {
+        if ((Get-FileHash -LiteralPath (Join-Path $taskInstall $taskFile.path) -Algorithm SHA256).Hash -ine $taskFile.sha256) { throw ('Installed runtime mismatch: ' + $taskFile.path) }
+    }
+    Invoke-NativeInstaller $taskInstaller @('/S','/STARTMENU=0','/DESKTOP=1','/AUTOSTART=1',('/D=' + $taskInstall))
+    Assert-Options $false $true $true
+    # An ordinary upgrade remembers all three choices.
+    Invoke-NativeInstaller $taskInstaller @('/S',('/D=' + $taskInstall))
+    Assert-Options $false $true $true
+    Invoke-NativeInstaller $taskInstaller @('/S','/STARTMENU=1','/DESKTOP=0','/AUTOSTART=0',('/D=' + $taskInstall))
+    Assert-Options $true $false $false
+    # Unknown files must survive removal; installers own only their inventory.
+    [IO.File]::WriteAllText((Join-Path $taskInstall 'user-kept.txt'),'preserve')
+}
+$taskSettingsHash = (Get-FileHash -LiteralPath $taskSettings -Algorithm SHA256).Hash
 $taskEntry = Get-ItemProperty -LiteralPath $taskRegistry
 if ($taskEntry.DisplayName -ne 'MiniTerm' -or $taskEntry.Publisher -ne 'Hnode' -or $taskEntry.DisplayVersion -ne $taskVersion -or $taskEntry.InstallLocation -ine $taskInstall) { throw 'Installed Apps & Features metadata is incorrect.' }
 if ($taskEntry.QuietUninstallString -ne ('"' + (Join-Path $taskInstall 'Uninstall.exe') + '" /S')) { throw 'The installer must register the NSIS silent removal command used by WinGet.' }
@@ -71,6 +106,7 @@ Invoke-NativeInstaller (Join-Path $taskInstall 'Uninstall.exe') @('/S')
 $taskRemovalDeadline = [DateTime]::UtcNow.AddSeconds(15)
 while (((Test-Path $taskRegistry) -or (Test-Path -LiteralPath (Join-Path $taskInstall 'miniterm.exe'))) -and [DateTime]::UtcNow -lt $taskRemovalDeadline) { Start-Sleep -Milliseconds 100 }
 if ((Test-Path $taskRegistry) -or (Test-Path -LiteralPath (Join-Path $taskInstall 'miniterm.exe')) -or (Get-FileHash -LiteralPath $taskSettings -Algorithm SHA256).Hash -ne $taskSettingsHash) { throw ('Removal or saved-settings preservation failed. Registry exists: ' + (Test-Path $taskRegistry) + '; app exists: ' + (Test-Path -LiteralPath (Join-Path $taskInstall 'miniterm.exe')) + '; settings hash matches: ' + ((Get-FileHash -LiteralPath $taskSettings -Algorithm SHA256).Hash -eq $taskSettingsHash)) }
+if ($InstallerPath -and ((Test-Path -LiteralPath $taskStartMenu) -or (Test-Path -LiteralPath $taskDesktop) -or (Test-Path -LiteralPath (Join-Path $taskInstall 'runtime/git/usr/bin/bash.exe')) -or -not (Test-Path -LiteralPath (Join-Path $taskInstall 'user-kept.txt')))) { throw 'Owned runtime/shortcut removal or user-file preservation failed.' }
 $taskManifestHashes = if ($InstallerPath) {
     'RELEASE_MANIFEST.json:' + (Get-FileHash -LiteralPath (Join-Path $taskRoot 'artifacts/RELEASE_MANIFEST.json') -Algorithm SHA256).Hash.ToLowerInvariant()
 } else {

@@ -7,11 +7,15 @@ const {spawn,spawnSync} = require('node:child_process');
 (async () => {
   const root = path.resolve(__dirname, '../artifacts/scroll-' + crypto.randomUUID());
   const shared=process.argv[4]==='shared';
+  const streaming=process.env.MINITERM_SCROLL_STREAMING==='1';
   const notification=shared&&process.env.MINITERM_SCROLL_NOTIFY==='1';
   const home = shared?path.join(process.env.LOCALAPPDATA,'mt-s-'+crypto.randomBytes(4).toString('hex'),'h'):path.join(root, 'codex-home'), work = path.join(root, 'work');
   fs.mkdirSync(home, {recursive:true}); fs.mkdirSync(work,{recursive:true});
   const native=path.join(process.env.APPDATA,'npm/node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe');
-  if(shared)fs.cpSync(path.join(process.env.USERPROFILE,'.codex/packages/app-server-daemon/releases/0.162.1-x86_64-pc-windows-msvc'),path.join(home,'packages/app-server-daemon/releases/0.162.1-x86_64-pc-windows-msvc'),{recursive:true});
+  const versionResult=spawnSync(native,['--version'],{windowsHide:true,encoding:'utf8',timeout:10000});
+  const nativeVersion=/^codex-cli (\d+\.\d+\.\d+)/.exec(versionResult.stdout||'')?.[1];
+  if(versionResult.status!==0||!nativeVersion)throw new Error('Cannot identify the installed Codex version.');
+  if(shared){const release=nativeVersion+'-x86_64-pc-windows-msvc';fs.cpSync(path.join(process.env.USERPROFILE,'.codex/packages/app-server-daemon/releases',release),path.join(home,'packages/app-server-daemon/releases',release),{recursive:true});}
   // Establish the fixture's own project root, so trusting it cannot target the repository.
   fs.mkdirSync(path.join(work, '.git'));
   const requests = [];
@@ -26,6 +30,7 @@ const {spawn,spawnSync} = require('node:child_process');
       requests.push(payload);
       fs.writeFileSync(path.join(root, 'requests.json'), JSON.stringify(requests, null, 2));
       const firstTurn=((payload.input||[]).filter(i=>i.role==='user').at(-1)?.content||[]).some(p=>p.text==='SCROLL-FIRST-TURN');
+      const cancelTurn=((payload.input||[]).filter(i=>i.role==='user').at(-1)?.content||[]).some(p=>p.text==='SCROLL-CANCEL-TURN');
       const toolOutput=(payload.input||[]).some(i=>i.type==='function_call_output'&&i.call_id==='call_scroll_environment');
       const text = firstTurn
         ? Array.from({length:180}, (_, i) => `SCROLL-LINE-${String(i).padStart(3,'0')} fixed local output`).join('\n')
@@ -53,6 +58,25 @@ const {spawn,spawnSync} = require('node:child_process');
       ];
       const finish=()=>{
         response.writeHead(200, {'content-type':'text/event-stream'});
+        if(cancelTurn){
+          response.write(events.slice(0,3).map((event,i)=>`event: ${event.type}\ndata: ${JSON.stringify({...event,sequence_number:i})}\n\n`).join(''));
+          fs.writeFileSync(path.join(root,'cancel-waiting.json'),JSON.stringify({waiting:true}));
+          response.once('close',()=>fs.writeFileSync(path.join(root,'cancel-closed.json'),JSON.stringify({closed:true})));
+          return;
+        }
+        if(streaming&&firstTurn){
+          let sequence=0,chunk=0;
+          const send=event=>response.write(`event: ${event.type}\ndata: ${JSON.stringify({...event,sequence_number:sequence++})}\n\n`);
+          events.slice(0,3).forEach(send);
+          const chunks=text.match(/(?:[^\n]*\n?){1,3}/g).filter(Boolean);
+          const timer=setInterval(()=>{
+            send({...events[3],delta:chunks[chunk++]});
+            fs.writeFileSync(path.join(root,'stream-progress.json'),JSON.stringify({chunk,total:chunks.length}));
+            if(chunk===chunks.length){clearInterval(timer);events.slice(4).forEach(send);response.end();fs.writeFileSync(path.join(root,'first-turn-completed.json'),JSON.stringify({toolOutput,streaming:true}));}
+          },250);
+          response.once('close',()=>clearInterval(timer));
+          return;
+        }
         response.end(events.map((event,i) => `event: ${event.type}\ndata: ${JSON.stringify({...event, sequence_number:i})}\n\n`).join(''));
         if(firstTurn)fs.writeFileSync(path.join(root,'first-turn-completed.json'),JSON.stringify({toolOutput}));
       };
@@ -68,6 +92,11 @@ sandbox_mode = "${process.argv[5]==='full'?'danger-full-access':'read-only'}"
 cli_auth_credentials_store = "file"
 web_search = "disabled"
 project_root_markers = []
+check_for_update_on_startup = false
+[tui]
+screen_reader_detection_done = true
+[tui.model_availability_nux]
+"gpt-6.1-sol" = 1
 [model_providers.fixture]
 name = "MiniTerm Scroll Fixture"
 base_url = "http://127.0.0.1:${server.address().port}/v1"
@@ -76,9 +105,7 @@ requires_openai_auth = false
 supports_websockets = false
 request_max_retries = 0
 stream_max_retries = 0
-[projects."${work.replaceAll('\\','/')}"]
-trust_level = "trusted"
-[projects.'${path.resolve(__dirname,'..').toLowerCase()}']
+[projects.'${work.toLowerCase()}']
 trust_level = "trusted"
 `);
   fs.writeFileSync(path.join(root,'fixture-owned.json'), JSON.stringify({kind:'miniterm-local-scroll',root,home,work}));
@@ -94,7 +121,7 @@ trust_level = "trusted"
     const helper=path.resolve(__dirname,'..',process.env.MINITERM_SCROLL_EXECUTOR_HELPER||process.argv[3]||'artifacts/miniterm.exe');
     const registered=spawnSync(helper,['integrate','codex-bash','enable'],{env:{...process.env,CODEX_HOME:home,MINITERM_DATA_DIR:root,PATH:path.dirname(native)+';'+process.env.PATH},encoding:'utf8',windowsHide:true});
     if(registered.status!==0)throw new Error('Owned Bash registration failed: '+registered.stderr);
-    if(notification){
+    if(notification||process.env.MINITERM_SCROLL_LINK==='1'){
       const notify=spawnSync(helper,['integrate','codex','enable'],{env:{...process.env,CODEX_HOME:home,MINITERM_DATA_DIR:root},encoding:'utf8',windowsHide:true});
       if(notify.status!==0)throw new Error('Owned notification registration failed: '+notify.stderr);
     }
@@ -128,14 +155,15 @@ trust_level = "trusted"
     // startup OSC replies were consumed instead of being inserted as text.
     const firstPromptClean = requests.length > 0 && (requests[0].input||[]).some(i=>i.role==='user' && (i.content||[]).some(p=>p.type==='input_text' && p.text==='SCROLL-FIRST-TURN'));
     const draftPreserved = userTexts.includes('SCROLL-DRAFT-KEEP-TAIL');
+    const cancelledStreamRecovered=!streaming||(fs.existsSync(path.join(root,'cancel-closed.json'))&&userTexts.includes('SCROLL-AFTER-CANCEL'));
     const resumeHistoryPreserved=!retry||requests.some(r=>{const text=JSON.stringify((r.input||[]).filter(i=>i.role==='user'));return text.includes('SCROLL-FIRST-TURN')&&text.includes('SCROLL-DRAFT-KEEP-TAIL')&&text.includes('SCROLL-RESUME-HISTORY');});
     const retryInputClean=!retry||userTexts.includes('SCROLL-RETRY-RECOVERED');
     const finalSharedInput=!retry||userTexts.includes('SCROLL-FINAL-SHARED');
     const callerEnvironmentPreserved=!shared||requests.some(r=>(r.input||[]).some(i=>i.type==='function_call_output'&&i.call_id==='call_scroll_environment'&&String(i.output).includes('__SCROLL_CALLER_OWNED-ENV__')));
-    const passed=firstPromptClean&&draftPreserved&&resumeHistoryPreserved&&retryInputClean&&finalSharedInput&&callerEnvironmentPreserved;
+    const passed=firstPromptClean&&draftPreserved&&cancelledStreamRecovered&&resumeHistoryPreserved&&retryInputClean&&finalSharedInput&&callerEnvironmentPreserved;
     if (code === 0 && fs.existsSync(path.join(root,'verification.json'))) {
       const result = JSON.parse(fs.readFileSync(path.join(root,'verification.json'),'utf8'));
-      fs.writeFileSync(path.join(root,'verification.json'),JSON.stringify({...result,firstPromptClean,draftPreserved,managedServerSurvived:shared,resumeHistoryPreserved,retryInputClean,finalSharedInput,callerEnvironmentPreserved,passed},null,2));
+      fs.writeFileSync(path.join(root,'verification.json'),JSON.stringify({...result,nativeVersion,firstPromptClean,draftPreserved,cancelledStreamRecovered,managedServerSurvived:shared,resumeHistoryPreserved,retryInputClean,finalSharedInput,callerEnvironmentPreserved,passed},null,2));
     }
     fs.writeFileSync(path.join(root,'provider.json'),JSON.stringify({requests:requests.length,firstPromptClean,draftPreserved,scope:'Only own fixed localhost Responses fixture; no credentials or model.'},null,2));
     console.log(JSON.stringify({root,code,firstPromptClean,draftPreserved,output:output.trim()}));

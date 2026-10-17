@@ -2,6 +2,7 @@ use crate::shell::ShellProfile;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
+    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -105,10 +106,7 @@ impl Settings {
     }
 
     pub fn load(path: &Path) -> Result<Self, String> {
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        let settings: Self = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
+        let settings: Self = serde_json::from_value(Self::document(path)?)
             .map_err(|e| format!("설정을 읽을 수 없습니다: {e}"))?;
         settings.validate()?;
         Ok(settings)
@@ -116,13 +114,53 @@ impl Settings {
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
         self.validate()?;
+        Self::write(
+            path,
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )
+    }
+
+    /// Installers edit only their own preference, preserving other settings and
+    /// extension fields. Reject a damaged document before touching the file.
+    pub fn save_autostart(path: &Path, enabled: bool) -> Result<(), String> {
+        let mut document = Self::document(path)?;
+        let settings: Self = serde_json::from_value(document.clone()).map_err(|e| e.to_string())?;
+        settings.validate()?;
+        document["autostart"] = enabled.into();
+        Self::write(path, &document)
+    }
+
+    fn document(path: &Path) -> Result<serde_json::Value, String> {
+        let file = match fs::File::open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(serde_json::json!({}));
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        let mut bytes = Vec::new();
+        file.take(1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > 1024 * 1024 {
+            return Err("설정 파일이 너무 큽니다 (최대 1 MiB).".into());
+        }
+        let document: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|e| format!("설정을 읽을 수 없습니다: {e}"))?;
+        if !document.is_object() {
+            return Err("설정 파일은 JSON 객체여야 합니다.".into());
+        }
+        Ok(document)
+    }
+
+    fn write(path: &Path, document: &serde_json::Value) -> Result<(), String> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let temp = path.with_extension("json.tmp");
         fs::write(
             &temp,
-            serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?,
+            serde_json::to_vec_pretty(document).map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?;
         fs::rename(&temp, path).map_err(|e| e.to_string())
@@ -132,6 +170,24 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn installer_startup_edit_preserves_other_fields_and_rejects_corruption() {
+        let path =
+            std::env::temp_dir().join(format!("miniterm-installer-{}.json", uuid::Uuid::new_v4()));
+        let original = serde_json::json!({"theme":"light","extension":{"value":42}});
+        fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+        Settings::save_autostart(&path, true).unwrap();
+        let saved = Settings::document(&path).unwrap();
+        assert_eq!(saved["theme"], original["theme"]);
+        assert_eq!(saved["extension"], original["extension"]);
+        assert!(Settings::load(&path).unwrap().autostart);
+        fs::write(&path, b"invalid JSON").unwrap();
+        assert!(Settings::save_autostart(&path, false).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"invalid JSON");
+        fs::write(&path, vec![b' '; 1024 * 1024 + 1]).unwrap();
+        assert!(Settings::load(&path).unwrap_err().contains("최대"));
+        fs::remove_file(path).unwrap();
+    }
     #[test]
     fn invalid_text_does_not_block_an_unrelated_live_preference() {
         let accepted = Settings::default();

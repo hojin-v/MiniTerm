@@ -10,13 +10,14 @@ $taskCommit = & git -C $taskRoot rev-parse HEAD
 $taskWorkingDirty = [bool](& git -C $taskRoot status --porcelain --untracked-files=normal)
 if ($taskWorkingDirty) { throw 'The current source working tree is dirty. Commit it and rebuild/repackage before publication.' }
 if ($LASTEXITCODE -ne 0 -or $taskManifest.releaseTag -ne $ReleaseTag -or $taskBuild.releaseTag -ne $ReleaseTag -or $taskManifest.sourceCommit -ne $taskCommit -or $taskBuild.sourceCommit -ne $taskCommit -or $taskManifest.sourceDirty -or $taskBuild.sourceDirty) { throw 'Release provenance does not match a clean committed source.' }
-if (-not $taskCompatibility.acceptedForAlpha -or $taskCompatibility.profile -ne 'default installed Git auto detection') { throw 'Default Git compatibility must be recorded and accepted for this alpha.' }
+if (-not $taskCompatibility.allPassed -or $taskCompatibility.profile -ne 'default bundled Git' -or $taskCompatibility.runtimeSha256 -ne $taskBuild.bundledRuntime.msysSha256) { throw 'Every bundled runtime compatibility check must pass for this exact build.' }
 $taskLabel = $ReleaseTag.Substring(1)
 $taskGuide = [IO.File]::ReadAllText((Join-Path $taskArtifacts 'TESTER_GUIDE.md'))
 $taskGuideDownloads = @([regex]::Matches($taskGuide, 'MiniTerm-[0-9]+\.[0-9]+\.[0-9]+-alpha\.[1-9][0-9]*-windows-x64(?:-setup\.exe|\.zip)') | ForEach-Object { $_.Value } | Sort-Object -Unique)
 $taskGuideExpected = @("MiniTerm-$taskLabel-windows-x64-setup.exe", "MiniTerm-$taskLabel-windows-x64.zip")
 if (@(Compare-Object $taskGuideExpected $taskGuideDownloads).Count) { throw 'Bundled tester guide download filenames must match this release version.' }
 $taskExpected = @('miniterm.exe',"MiniTerm-$taskLabel-windows-x64-setup.exe","MiniTerm-$taskLabel-windows-x64.zip",'BUILD_INFO.json','THIRD_PARTY_NOTICES.html','TESTER_GUIDE.md','RELEASE_NOTES.md','STATUS.md','COMPATIBILITY.json','SHA256SUMS')
+$taskExpected += @('MiniTerm-msys-3.6.10-source.tar.gz','BUNDLED_RUNTIME.md','BASH_RUNTIME_FILES.json')
 if (@($taskManifest.files).Count -ne $taskExpected.Count -or @($taskManifest.files.name | Sort-Object -Unique).Count -ne $taskExpected.Count) { throw 'Unexpected release file list.' }
 foreach ($taskFile in $taskManifest.files) {
     if ($taskFile.name -notin $taskExpected -or [IO.Path]::GetFileName($taskFile.name) -ne $taskFile.name) { throw 'Unexpected release file.' }

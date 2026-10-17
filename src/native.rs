@@ -2,10 +2,10 @@ use crate::geometry::{configured_bounds, Rect, WindowPreferences};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::mem::{size_of, size_of_val, zeroed};
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, BOOL, HANDLE, HWND, LPARAM, RECT},
+    Foundation::{CloseHandle, BOOL, HANDLE, HWND, LPARAM, POINT, RECT},
     Graphics::Gdi::{
-        EnumDisplayMonitors, GetMonitorInfoW, MonitorFromWindow, HDC, HMONITOR, MONITORINFOEXW,
-        MONITOR_DEFAULTTONEAREST,
+        EnumDisplayMonitors, GetMonitorInfoW, MonitorFromWindow, ScreenToClient, HDC, HMONITOR,
+        MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
     },
     System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
@@ -13,8 +13,9 @@ use windows_sys::Win32::{
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
     },
     UI::WindowsAndMessaging::{
-        GetForegroundWindow, IsWindowVisible, SetForegroundWindow, SetWindowPos, ShowWindow,
-        MONITORINFOF_PRIMARY, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE,
+        GetCursorPos, GetForegroundWindow, IsWindowVisible, SetForegroundWindow, SetWindowPos,
+        ShowWindow, WindowFromPoint, MONITORINFOF_PRIMARY, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE,
+        SW_SHOWNOACTIVATE,
     },
 };
 
@@ -373,6 +374,21 @@ unsafe extern "system" fn settings_paint_callback(
 pub fn focused(hwnd: isize) -> bool {
     unsafe { GetForegroundWindow() == hwnd as HWND }
 }
+
+/// Refresh wheel hit testing after a window moves back under a stationary mouse.
+/// Checking the topmost window keeps covered/settings windows from scrolling us.
+pub fn cursor_in_client(hwnd: isize) -> Option<[f32; 2]> {
+    unsafe {
+        let mut point = POINT { x: 0, y: 0 };
+        if GetCursorPos(&mut point) == 0
+            || WindowFromPoint(point) != hwnd as HWND
+            || ScreenToClient(hwnd as HWND, &mut point) == 0
+        {
+            return None;
+        }
+        Some([point.x as f32, point.y as f32])
+    }
+}
 pub fn foreground() -> isize {
     unsafe { GetForegroundWindow() as isize }
 }
@@ -584,20 +600,37 @@ pub fn parse_shortcut(text: &str) -> Result<Option<Shortcut>, String> {
     Ok(Some(Shortcut { modifiers, key }))
 }
 
+pub fn autostart_enabled(helper: &std::path::Path) -> Result<bool, String> {
+    use winreg::{enums::HKEY_CURRENT_USER, RegKey};
+    let key = match RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
+    {
+        Ok(key) => key,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.to_string()),
+    };
+    let existing: String = match key.get_value("MiniTerm") {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.to_string()),
+    };
+    if existing != format!("\"{}\" --autostart", helper.display()) {
+        return Err("다른 MiniTerm 시작 항목이 있습니다. 기존 항목을 보존했습니다.".into());
+    }
+    Ok(true)
+}
+
 pub fn autostart(helper: &std::path::Path, enabled: bool) -> Result<(), String> {
+    let previous = autostart_enabled(helper)?;
     use winreg::{enums::HKEY_CURRENT_USER, RegKey};
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = hkcu
         .create_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
         .map_err(|e| e.to_string())?;
     let owned = format!("\"{}\" --autostart", helper.display());
-    let existing: Option<String> = key.get_value("MiniTerm").ok();
-    if existing.as_ref().is_some_and(|value| value != &owned) {
-        return Err("다른 MiniTerm 시작 항목이 있습니다. 기존 항목을 보존했습니다.".into());
-    }
     if enabled {
         key.set_value("MiniTerm", &owned).map_err(|e| e.to_string())
-    } else if existing.is_some() {
+    } else if previous {
         key.delete_value("MiniTerm").map_err(|e| e.to_string())
     } else {
         Ok(())

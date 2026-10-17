@@ -26,7 +26,7 @@ const pause=ms=>new Promise(r=>setTimeout(r,ms));
    if(req.url!=='/v1/responses'||req.method!=='POST'){res.writeHead(404);res.end();return;}
    const request=JSON.parse(body);requests.push(request);
    const user=JSON.stringify((request.input||[]).filter(i=>i.role==='user').at(-1));
-   const tag=['FINAL','RECOVERED','RESUME'].find(t=>user?.includes('LINK-'+t))||'FIRST';
+   const tag=['FINAL','RECOVERED','RESUME','NEW'].find(t=>user?.includes('LINK-'+t))||'FIRST';
    const call='call_link_'+tag.toLowerCase();
    const output=(request.input||[]).some(i=>i.type==='function_call_output'&&i.call_id===call);
    const tool=(request.tools||[]).find(t=>t.name==='exec_command'||t.name==='shell_command');
@@ -87,6 +87,17 @@ trust_level='trusted'
  }
  async function linked(sid,args){const connection=cli(['codex-prepare','--',...args],{MINITERM_SESSION_ID:sid});const [url,token]=connection.split(' ');if(!url?.startsWith('ws://127.0.0.1:')||!token)throw new Error('Production helper did not create an authenticated link');return {connection,url,child:start('linked',['--no-alt-screen','--remote',url,'--remote-auth-token-env','MINITERM_CODEX_LINK_TOKEN','--cd',work,...args],{MINITERM_CODEX_LINK_TOKEN:token,MINITERM_SESSION_ID:sid}),sid};}
  async function detach(link){await close(link.child);cli(['codex-detach',link.connection],{MINITERM_SESSION_ID:link.sid});}
+ async function additionalConnection(link){
+  const token=link.connection.split(' ')[1];
+  return new Promise((resolve,reject)=>{
+   const socket=net.createConnection(Number(new URL(link.url).port),'127.0.0.1');let header='';
+   socket.setTimeout(5000,()=>socket.destroy(new Error('Additional shared connection timed out while the main TUI was active')));
+   socket.once('error',reject);
+   socket.once('connect',()=>socket.write(`GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: ${crypto.randomBytes(16).toString('base64')}\r\nAuthorization: Bearer ${token}\r\n\r\n`));
+   socket.on('data',data=>{header+=data.toString('latin1');if(header.includes('\r\n\r\n')){socket.destroy();if(header.startsWith('HTTP/1.1 101 '))resolve();else reject(new Error('Additional connection rejected: '+header.split('\r\n')[0]));}});
+   socket.once('close',()=>{if(!header.includes('\r\n\r\n'))reject(new Error('Additional connection closed before its WebSocket handshake'));});
+  });
+ }
  const completed=tag=>requests.some(r=>(r.input||[]).some(i=>i.type==='function_call_output'&&i.call_id==='call_link_'+tag.toLowerCase()&&String(i.output).includes('__LINK_BASH_'+tag+'__')));
  function key(child,vk,scan,ch){for(const down of [1,0])child.proc.write('\x1b['+[vk,scan,ch,down,0,1].join(';')+'_');}
  async function submit(child,text){child.proc.write('\x1b[200~'+text+'\x1b[201~');await pause(200);key(child,13,28,13);}
@@ -101,11 +112,17 @@ trust_level='trusted'
   const first=await linked(firstSid,['LINK-FIRST']);await until(()=>completed('FIRST')&&state().details.states[firstSid]==='complete','first shared completion');
   let snapshot=state();fs.writeFileSync(path.join(root,'first-state.json'),JSON.stringify(snapshot,null,2));
   if(snapshot.details.states[secondSid]!=='unknown'||!snapshot.details.unread.includes(firstSid)||snapshot.details.noticeCount!==1)throw new Error('Shared completion was not isolated to the first tab');
+  if(process.env.MINITERM_TEST_SKIP_CONNECTION_PROBE!=='1'){await additionalConnection(first);result.concurrentConnection=true;}
+  await submit(first.child,'/new');await pause(600);await submit(first.child,'LINK-NEW');
+  await until(()=>completed('NEW'),'new conversation accepts input');result.newConversationInput=true;
+  await submit(first.child,'/resume');await until(async()=>(await screen(first.child)).includes('Resume a previous session'),'remote TUI session picker');
+  fs.writeFileSync(path.join(root,'picker-screen.txt'),await screen(first.child));
+  key(first.child,27,1,27);await until(async()=>(await screen(first.child)).includes('Ask Codex'),'picker dismissed');result.remoteSessionPicker=true;
   const {DatabaseSync}=require('node:sqlite'),db=new DatabaseSync(path.join(home,'state_5.sqlite'));let thread;try{const row=db.prepare('SELECT id,cwd FROM threads WHERE first_user_message=?').get('LINK-FIRST');if(!row)throw new Error('Main fixture conversation was not recorded');thread=row.id;const cwd=row.cwd.startsWith('\\\\?\\')?row.cwd.slice(4):row.cwd;if(path.resolve(cwd).toLowerCase()!==work.toLowerCase())throw new Error('Shared TUI changed the caller working directory');}finally{db.close();}
   await detach(first);
   const resumed=await linked(secondSid,['resume',thread,'LINK-RESUME']);await until(()=>completed('RESUME')&&state().details.states[secondSid]==='complete','resumed shared completion');
   snapshot=state();fs.writeFileSync(path.join(root,'resumed-state.json'),JSON.stringify(snapshot,null,2));
-  if(snapshot.details.noticeCount!==2||snapshot.details.unread.length!==2)throw new Error('Resumed conversation was not assigned to its new tab');
+  if(snapshot.details.noticeCount!==3||snapshot.details.unread.length!==2)throw new Error('Resumed conversation was not assigned to its new tab');
   if(!requests.some(r=>{const text=JSON.stringify((r.input||[]).filter(i=>i.role==='user'));return text.includes('LINK-FIRST')&&text.includes('LINK-RESUME');}))throw new Error('Shared resume lost conversation history');
   // Keep this frontend connected so the conflicting private writer is real.
   const privateUi=start('private',['--no-alt-screen','--no-daemon','resume',thread],{MINITERM_SESSION_ID:secondSid});

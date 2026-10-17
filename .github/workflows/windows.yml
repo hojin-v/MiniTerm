@@ -11,14 +11,35 @@ permissions:
   contents: read
 
 jobs:
+  runtime:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Build private Bash runtime from pinned source
+        run: python scripts/build-bash-runtime.py
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: source-built-bash-runtime
+          if-no-files-found: error
+          path: |
+            artifacts/runtime-build/msys-2.0.dll
+            artifacts/runtime-build/BUILD_RECEIPT.json
+            artifacts/runtime-build/MiniTerm-msys-3.6.10-source.tar.gz
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        if: failure()
+        with:
+          name: runtime-build-logs
+          path: artifacts/runtime-build/*.log
   check:
+    needs: runtime
     runs-on: windows-2025
     timeout-minutes: 40
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}\.tools\target
       MINITERM_DATA_DIR: ${{ github.workspace }}\artifacts\check-data
       MINITERM_INSTANCE_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}
-      MINITERM_RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+      MINITERM_RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1.0-alpha.8' }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: dtolnay/rust-toolchain@4aab473fa1157d90c6dc14f879ca54797e16fea0 # 1.90.0
@@ -47,17 +68,23 @@ jobs:
         run: |
           $env:MINITERM_DATA_DIR = Join-Path $env:GITHUB_WORKSPACE ('artifacts/console-' + [guid]::NewGuid().ToString())
           cargo test --locked --lib terminal::tests::native_console_limits_shutdown_and_final_output_are_preserved -- --ignored --exact --nocapture --test-threads=1
-      - name: Default Git compatibility (only documented alpha failures allowed)
-        run: ./scripts/verify-git-compatibility.ps1 -AllowKnownFailures
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: source-built-bash-runtime
+          path: artifacts/runtime-build
+      - name: Prepare verified private Bash runtime
+        run: ./scripts/prepare-bash-runtime.ps1 -PatchedDll artifacts/runtime-build/msys-2.0.dll -BuildReceipt artifacts/runtime-build/BUILD_RECEIPT.json -ApplicationDirectory artifacts/bundled-application
+      - name: Install pinned native Codex fixture (localhost provider, no account)
+        run: npm install --global @openai/codex@0.163.0
+      - name: Default bundled Git compatibility (all checks required)
+        run: ./scripts/verify-bash-runtime.ps1 -ApplicationDirectory artifacts/bundled-application
       - name: Build
         run: ./scripts/build.ps1
       - name: Package
         run: ./scripts/package.ps1 -SkipBuild -ReleaseTag $env:MINITERM_RELEASE_TAG
       - name: Validate release manifest
-        if: startsWith(github.ref, 'refs/tags/')
         run: ./scripts/publish-alpha.ps1 -ReleaseTag $env:MINITERM_RELEASE_TAG -ValidateOnly
       - name: Verify release installer before publication
-        if: startsWith(github.ref, 'refs/tags/')
         run: ./scripts/verify-installer.ps1 -InstallerPath ('artifacts/MiniTerm-' + $env:MINITERM_RELEASE_TAG.Substring(1) + '-windows-x64-setup.exe')
       - name: Compatibility evidence
         if: always()
@@ -69,6 +96,7 @@ jobs:
             artifacts/COMPATIBILITY.json
             artifacts/git-compatibility.log
             artifacts/native-installer-verification.json
+            artifacts/bundled-runtime-verification.json
       - name: Package artifact
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
@@ -86,6 +114,9 @@ jobs:
             artifacts/RELEASE_NOTES.md
             artifacts/STATUS.md
             artifacts/COMPATIBILITY.json
+            artifacts/BASH_RUNTIME_FILES.json
+            artifacts/BUNDLED_RUNTIME.md
+            artifacts/MiniTerm-msys-3.6.10-source.tar.gz
 
   publish:
     needs: check

@@ -310,7 +310,12 @@ impl ShellProfile {
                 });
                 command.cwd(&dir);
                 command.env("CHERE_INVOKING", "1");
-                command.env("MSYSTEM", "MINGW64");
+                let ucrt = bash
+                    .parent()
+                    .and_then(std::path::Path::parent)
+                    .and_then(std::path::Path::parent)
+                    .is_some_and(|root| root.join("ucrt64/bin/git.exe").is_file());
+                command.env("MSYSTEM", if ucrt { "UCRT64" } else { "MINGW64" });
                 command.env("SHELL", "/bin/bash");
                 // Use this profile's Bash, including a custom/runtime path. A
                 // native agent must not resolve System32's WSL bash launcher.

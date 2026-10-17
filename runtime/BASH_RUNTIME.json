@@ -1,14 +1,18 @@
 {
   "schemaVersion": 1,
-  "status": "candidate; not approved for public packaging",
-  "gitVersion": "2.50.1.windows.1",
-  "portableGitUrl": "https://github.com/git-for-windows/git/releases/download/v2.50.1.windows.1/PortableGit-2.50.1-64-bit.7z.exe",
-  "portableGitSha256": "c45a7dfa2bde34059f6dbd85f49a95d73d5aea29305f51b79595e56e4f323a3d",
-  "bashSha256": "fc362aae1f217d34d02237d99527839dd6cf85b37c7a0277109400bfa0faa594",
-  "stockMsysSha256": "b6c7e56b63e6447b204f2feb5295565ad767fbb690b03930f11e37d55c002e8a",
-  "patchedMsysSha256": "bd6674212e79904dc20827603f25253b46bd7321a5ce4126889ee3030d27281b",
-  "msysSourceCommit": "7674c51e18b9323c0072c8299c9356a7d9511a4e",
-  "patchSha256": "c0dce93a00ad2e234786f1bd50af72fe4426a705cdb70f749e0e58cc00613715",
+  "status": "source build; public release requires bundled compatibility and installer gates",
+  "gitVersion": "2.56.0.windows.2",
+  "portableGitUrl": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/PortableGit-2.56.0.2-64-bit.7z.exe",
+  "portableGitSha256": "075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b",
+  "bashSha256": "5490d0da5e7cf9d92068cc48fcc590f2bcf8564add8ff91c3b5fe541eb2d72e3",
+  "stockMsysSha256": "2a89b7c31b323c42e2fb37900af087aeb27417694e630a210bc75b0369410bc7",
+  "msysSourceCommit": "b11613e477c006b2ce0332463ed07f1118260e79",
+  "patchSha256": "2ddc959bd42f6258ed7dbb1d575b0628cb1fb5a351578f4b733187638cb608e9",
   "sevenZipUrl": "https://github.com/ip7z/7zip/releases/download/25.01/7zr.exe",
-  "sevenZipSha256": "27cbe3d5804ad09e90bbcaa916da0d5c3b0be9462d0e0fb6cb54be5ed9030875"
+  "sevenZipSha256": "27cbe3d5804ad09e90bbcaa916da0d5c3b0be9462d0e0fb6cb54be5ed9030875",
+  "upstreamRuntimeCommit": "5a1665c8a0fb24930e55f1621441dfd98a798c15",
+  "recipeCommit": "8f92182cb44217641a54caa0a8246226deff01fd",
+  "sdkCommit": "a889f5bfa362c451584f3fe7388fdd0f45826a1b",
+  "sourceDateEpoch": 1790587645,
+  "sourceArchive": "MiniTerm-msys-3.6.10-source.tar.gz"
 }

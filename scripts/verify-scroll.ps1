@@ -1,5 +1,6 @@
 ﻿param([Parameter(Mandatory=$true)][string]$Fixture,[string]$BatteryLayout='', [string]$Executable='artifacts/miniterm.exe',[switch]$Shared,[switch]$Retry,[switch]$CodexNotify)
 $ErrorActionPreference='Stop'
+$Streaming=$env:MINITERM_SCROLL_STREAMING -eq '1'
 $taskRoot=Split-Path -Parent $PSScriptRoot
 $taskExecutable=[IO.Path]::GetFullPath((Join-Path $taskRoot $Executable))
 $taskFixture=[IO.Path]::GetFullPath($Fixture)
@@ -140,7 +141,8 @@ function Wait-ScrollSettled {
  }while([DateTime]::UtcNow -lt $taskDeadline)
  throw 'Owned wheel animation did not settle.'
 }
-function Wheel([int]$Delta) {
+function Wheel([int]$Delta,[switch]$Live) {
+ $taskWheelBefore=(Get-ScrollState).details.terminalScroll.wheelEvents
  $taskBody=Get-ScrollWidget 'terminal'
  $taskBounds=[MiniTermScrollProbe]::Bounds($taskWindow)
  $taskScale=[MiniTermScrollProbe]::GetDpiForWindow($taskWindow)/96.0
@@ -156,7 +158,13 @@ function Wheel([int]$Delta) {
  $taskWheelParam=[IntPtr](([int64]$Delta -band 0xffff)*65536)
  $taskWheelPoint=[IntPtr](([int64]$taskPoint.Y -shl 16) -bor ($taskPoint.X -band 0xffff))
  if(-not [MiniTermScrollProbe]::PostMessage($taskWindow,0x20a,$taskWheelParam,$taskWheelPoint)){throw 'Own wheel message rejected.'}
- Wait-ScrollSettled
+ if($Live){
+  # A live stream keeps changing displayOffset; waiting for an idle viewport
+  # would accidentally test the completed response instead of concurrency.
+  $taskWheelDeadline=[DateTime]::UtcNow.AddSeconds(3)
+  do{Start-Sleep -Milliseconds 80;$taskWheelAfter=(Get-ScrollState).details.terminalScroll.wheelEvents}while($taskWheelAfter -le $taskWheelBefore -and [DateTime]::UtcNow -lt $taskWheelDeadline)
+  if($taskWheelAfter -le $taskWheelBefore){throw 'Native wheel did not reach the GUI while streaming.'}
+ }else{Wait-ScrollSettled}
 }
 function Start-ScrollGui {
  $script:taskApp=[Diagnostics.Process]::Start((New-ScrollStart ''))
@@ -239,6 +247,7 @@ try {
  }
  $taskProbeLog=Join-Path $taskFixture 'console-input.log'
  $taskLaunch=if($BatteryLayout -eq 'probe'){'"'+(Join-Path $taskRoot 'artifacts/experiments/console-input-probe.exe').Replace('\','/')+'" "'+$taskProbeLog.Replace('\','/')+'" 520'}elseif($Shared){'MINITERM_SCROLL_CALLER=OWNED-ENV codex'}else{'codex --no-daemon --strict-config'}
+ if($env:MINITERM_SCROLL_LAUNCH_TRACE -eq '1'){$taskLaunch+='; printf ''__CODEX_EXIT_%s__\n'' "$?"'}
  [MiniTermScrollProbe]::Text($taskWindow,$taskLaunch)
  [MiniTermScrollProbe]::Press($taskWindow,13)
  if($BatteryLayout -eq 'probe'){
@@ -267,7 +276,33 @@ try {
  Save-ConsoleMode 'before-enter'
  [MiniTermScrollProbe]::Press($taskWindow,13)
  if($CodexNotify){Invoke-Scroll 'diagnostic key:ctrl+alt+2'|Out-Null}
- $taskDeadline=[DateTime]::UtcNow.AddSeconds(15)
+ if($Streaming){
+  if($CodexNotify){throw 'Streaming input check requires its own active tab.'}
+  $taskStreamDeadline=[DateTime]::UtcNow.AddSeconds(15)
+  do{
+   Start-Sleep -Milliseconds 100
+   $taskProgressPath=Join-Path $taskFixture 'stream-progress.json'
+   $taskStreamProgress=if(Test-Path -LiteralPath $taskProgressPath){Get-Content -LiteralPath $taskProgressPath -Encoding UTF8 -Raw|ConvertFrom-Json}else{$null}
+  }while((!$taskStreamProgress -or $taskStreamProgress.chunk -lt 30) -and [DateTime]::UtcNow -lt $taskStreamDeadline)
+  if(!$taskStreamProgress -or $taskStreamProgress.chunk -lt 30){throw 'Native Codex did not begin its streaming response.'}
+  $taskStreamingBefore=Get-ScrollState
+  [MiniTermScrollProbe]::Text($taskWindow,'SCROLL-DRAFT-KEEP')
+  Wheel 1200 -Live
+  $taskStreamingUp=Get-ScrollState
+  if($taskStreamingUp.details.terminalScroll.displayOffset -le 0){throw 'Cannot scroll during streaming output.'}
+  Save-ScrollImage 'streaming-wheel-up.png'
+  Invoke-Scroll 'diagnostic collapse'|Out-Null
+  Start-Sleep -Milliseconds 400
+  Invoke-Scroll 'diagnostic expand'|Out-Null
+  Start-Sleep -Milliseconds 400
+  $taskStreamingAfter=Get-ScrollState
+  $taskStreamProgress=Get-Content -LiteralPath $taskProgressPath -Encoding UTF8 -Raw|ConvertFrom-Json
+  if($taskStreamProgress.chunk -ge $taskStreamProgress.total){throw 'Stream completed before the concurrent input/scroll/resize check.'}
+  if($taskStreamingAfter.details.terminalScroll.historyLines -le $taskStreamingBefore.details.terminalScroll.historyLines){throw 'Visible output stopped advancing during concurrent input/scroll/resize.'}
+  [IO.File]::WriteAllText((Join-Path $taskFixture 'streaming-snapshots.json'),(@{before=$taskStreamingBefore;up=$taskStreamingUp;after=$taskStreamingAfter;provider=$taskStreamProgress}|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
+  Wheel -12000 -Live
+ }
+ $taskDeadline=[DateTime]::UtcNow.AddSeconds(25)
  do {Start-Sleep -Milliseconds 100}while(-not (Test-Path -LiteralPath (Join-Path $taskFixture 'first-turn-completed.json')) -and [DateTime]::UtcNow -lt $taskDeadline)
  if(-not (Test-Path -LiteralPath (Join-Path $taskFixture 'first-turn-completed.json'))){
   Save-ScrollImage 'no-request.png'
@@ -294,7 +329,7 @@ try {
   Start-Sleep -Milliseconds 300
  }
  Wait-ScrollSettled
- [MiniTermScrollProbe]::Text($taskWindow,'SCROLL-DRAFT-KEEP')
+ if(-not $Streaming){[MiniTermScrollProbe]::Text($taskWindow,'SCROLL-DRAFT-KEEP')}
  Start-Sleep -Milliseconds 150
  Save-ScrollImage 'before-wheel.png'
  $taskBefore=Get-ScrollState
@@ -325,6 +360,27 @@ try {
  if(((Get-ScrollState).sessions -join ',') -ne ($taskSessions -join ',')){throw 'Scrolling changed the session.'}
  Start-Sleep -Milliseconds 400
  Save-ScrollImage 'draft-submitted.png'
+ if($Streaming){
+  [MiniTermScrollProbe]::Text($taskWindow,'SCROLL-CANCEL-TURN')
+  Start-Sleep -Milliseconds 600
+  [MiniTermScrollProbe]::Press($taskWindow,13)
+  $taskCancelDeadline=[DateTime]::UtcNow.AddSeconds(10)
+  do{Start-Sleep -Milliseconds 100}while(-not (Test-Path -LiteralPath (Join-Path $taskFixture 'cancel-waiting.json')) -and [DateTime]::UtcNow -lt $taskCancelDeadline)
+  if(-not (Test-Path -LiteralPath (Join-Path $taskFixture 'cancel-waiting.json'))){throw 'Owned response did not enter its deliberate wait.'}
+  Start-Sleep -Milliseconds 600
+  [MiniTermScrollProbe]::Press($taskWindow,27)
+  $taskCancelDeadline=[DateTime]::UtcNow.AddSeconds(10)
+  do{Start-Sleep -Milliseconds 100}while(-not (Test-Path -LiteralPath (Join-Path $taskFixture 'cancel-closed.json')) -and [DateTime]::UtcNow -lt $taskCancelDeadline)
+  if(-not (Test-Path -LiteralPath (Join-Path $taskFixture 'cancel-closed.json'))){throw 'Escape did not cancel the stalled response.'}
+  [MiniTermScrollProbe]::Text($taskWindow,'SCROLL-AFTER-CANCEL')
+  Start-Sleep -Milliseconds 600
+  [MiniTermScrollProbe]::Press($taskWindow,13)
+  Wait-ScrollRequests 'SCROLL-AFTER-CANCEL'
+  Save-ScrollImage 'after-cancel-response.png'
+ }
+ if($env:MINITERM_SCROLL_IDLE_SECONDS -eq '30'){
+  & (Join-Path $PSScriptRoot 'measure-idle.ps1') -ProcessId $taskApp.Id -Seconds 30 -OutputPath (Join-Path $taskFixture 'codex-idle.json')|Out-Null
+ }
  Close-ScrollGui
  if($Retry){
   # Closing the frontend preserves the owned shared server and its conversation.
@@ -385,6 +441,7 @@ try {
  foreach($taskUserApp in $taskUserApps){$taskExisting=Get-Process -Id $taskUserApp.id -ErrorAction Stop;if($taskExisting.StartTime -ne $taskUserApp.started){throw 'Existing app identity changed.'}}
  $taskResult=@{fixture=$taskFixture;executableSha256=(Get-FileHash -LiteralPath $taskExecutable -Algorithm SHA256).Hash;batteryLayout=$BatteryLayout;sharedBackendRequested=[bool]$Shared;actualCodex=$true;wheelInput='native_WM_MOUSEWHEEL';wheelUp=$true;wheelDown=$true;compactWheel=$true;sessionPreserved=$true;sharedResumeChecked=[bool]$Retry;retryWhileOwnedWriterActive=[bool]$Retry;retryAfterOwnedWriterReleased=[bool]$Retry;scope='Real GUI and installed CLI; targeted Win32 wheel messages through winit/egui. Own localhost fixed SSE output and fixed AI Battery. Draft checked separately by provider; no account/model or physical wheel device claim.'}
  $taskResult.sharedNotificationChecked=[bool]$CodexNotify
+ $taskResult.streamingInputScrollResize=[bool]$Streaming
  [IO.File]::WriteAllText((Join-Path $taskFixture 'verification.json'),($taskResult|ConvertTo-Json),[Text.UTF8Encoding]::new($false))
  $taskResult|ConvertTo-Json
 } catch {

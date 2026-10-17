@@ -20,6 +20,38 @@ use std::{
 };
 
 const MAX_METADATA: usize = 4 * 1024 * 1024;
+// The TUI opens auxiliary connections for /new and the session picker while
+// retaining its foreground connection. Bound resources without serializing them.
+const MAX_CONNECTIONS: usize = 4;
+
+struct Connection {
+    stream: TcpStream,
+    job: Mutex<Option<Arc<crate::native::ProcessJob>>>,
+}
+impl Connection {
+    fn close(&self) {
+        let _ = self.stream.shutdown(Shutdown::Both);
+        if let Some(job) = self.job.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            job.terminate();
+        }
+    }
+}
+type Connections = Arc<Mutex<HashMap<u64, Arc<Connection>>>>;
+
+struct ConnectionGuard {
+    id: u64,
+    connections: Connections,
+    connection: Arc<Connection>,
+}
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.connection.close();
+        self.connections
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.id);
+    }
+}
 
 #[derive(Default)]
 struct Observer {
@@ -266,18 +298,19 @@ impl Frames {
 struct Link {
     session: String,
     stop: Arc<AtomicBool>,
-    active: Arc<Mutex<Option<TcpStream>>>,
-    job: Arc<Mutex<Option<Arc<crate::native::ProcessJob>>>>,
+    connections: Connections,
     finished: Arc<AtomicBool>,
 }
 impl Drop for Link {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        if let Some(job) = self.job.lock().unwrap_or_else(|p| p.into_inner()).take() {
-            job.terminate();
-        }
-        if let Some(stream) = self.active.lock().unwrap_or_else(|p| p.into_inner()).take() {
-            let _ = stream.shutdown(Shutdown::Both);
+        for connection in self
+            .connections
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+        {
+            connection.close();
         }
     }
 }
@@ -329,8 +362,7 @@ pub fn start(
         listener.local_addr().map_err(|e| e.to_string())?.port()
     );
     let stop = Arc::new(AtomicBool::new(false));
-    let active = Arc::new(Mutex::new(None));
-    let job = Arc::new(Mutex::new(None));
+    let connections = Connections::default();
     let finished = Arc::new(AtomicBool::new(false));
     let mut links = LINKS.lock().unwrap_or_else(|p| p.into_inner());
     links.retain(|_, link| !link.finished.load(Ordering::Acquire));
@@ -342,8 +374,7 @@ pub fn start(
         Link {
             session: session.into(),
             stop: stop.clone(),
-            active: active.clone(),
-            job: job.clone(),
+            connections: connections.clone(),
             finished: finished.clone(),
         },
     );
@@ -353,36 +384,85 @@ pub fn start(
     let environment = environment.clone();
     let session = session.to_owned();
     let connection = endpoint.clone();
-    thread::spawn(move || {
-        let mut deadline = Instant::now() + Duration::from_secs(30);
-        while !stop.load(Ordering::Acquire) && Instant::now() < deadline {
-            match listener.accept() {
-                Ok((stream, _)) => {
-                    *active.lock().unwrap_or_else(|p| p.into_inner()) = stream.try_clone().ok();
-                    let _ = relay(
-                        stream,
-                        &token,
-                        &session,
-                        &launch,
-                        &home,
-                        &cwd,
-                        &environment,
-                        &stop,
-                        &job,
-                        &connection,
-                    );
-                    job.lock().unwrap_or_else(|p| p.into_inner()).take();
-                    active.lock().unwrap_or_else(|p| p.into_inner()).take();
+    let worker = thread::Builder::new()
+        .name("codex-listener".into())
+        .spawn(move || {
+            let mut deadline = Instant::now() + Duration::from_secs(30);
+            let mut next_id = 0u64;
+            while !stop.load(Ordering::Acquire) && Instant::now() < deadline {
+                if !connections
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .is_empty()
+                {
                     deadline = Instant::now() + Duration::from_secs(30);
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(50))
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let Ok(active) = stream.try_clone() else {
+                            continue;
+                        };
+                        let active = Arc::new(Connection {
+                            stream: active,
+                            job: Mutex::new(None),
+                        });
+                        let mut slots = connections.lock().unwrap_or_else(|p| p.into_inner());
+                        if slots.len() >= MAX_CONNECTIONS {
+                            // Drop only this excess connection. Existing TUI work remains live.
+                            continue;
+                        }
+                        let id = next_id;
+                        next_id = next_id.wrapping_add(1);
+                        slots.insert(id, active.clone());
+                        drop(slots);
+                        let guard = ConnectionGuard {
+                            id,
+                            connections: connections.clone(),
+                            connection: active,
+                        };
+                        let (token, session, launch, home, cwd, environment, stop, connection) = (
+                            token.clone(),
+                            session.clone(),
+                            launch.clone(),
+                            home.clone(),
+                            cwd.clone(),
+                            environment.clone(),
+                            stop.clone(),
+                            connection.clone(),
+                        );
+                        // A failed spawn drops the closure and its guard, releasing the slot.
+                        let _ =
+                            thread::Builder::new()
+                                .name("codex-relay".into())
+                                .spawn(move || {
+                                    let guard = guard;
+                                    let _ = relay(
+                                        stream,
+                                        &token,
+                                        &session,
+                                        &launch,
+                                        &home,
+                                        &cwd,
+                                        &environment,
+                                        &stop,
+                                        &guard.connection.job,
+                                        &connection,
+                                    );
+                                });
+                        deadline = Instant::now() + Duration::from_secs(30);
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(50))
+                    }
+                    Err(_) => break,
                 }
-                Err(_) => break,
             }
-        }
-        finished.store(true, Ordering::Release);
-    });
+            finished.store(true, Ordering::Release);
+        });
+    if let Err(error) = worker {
+        links.remove(&endpoint);
+        return Err(error.to_string());
+    }
     Ok(endpoint)
 }
 
@@ -486,48 +566,50 @@ fn relay(
                 event,
             });
         })?;
-        let reader = thread::spawn(move || {
-            let mut frames = Frames::default();
-            let mut header = Vec::new();
-            let mut ready = false;
-            let mut bytes = [0; 16 * 1024];
-            while let Ok(count) = output.read(&mut bytes) {
-                if count == 0 || outgoing.write_all(&bytes[..count]).is_err() {
-                    break;
-                }
-                let mut start = 0;
-                if !ready {
-                    for (i, &b) in bytes[..count].iter().enumerate() {
-                        header.push(b);
-                        if header.ends_with(b"\r\n\r\n") {
-                            ready = header.starts_with(b"HTTP/1.1 101 ");
-                            start = i + 1;
-                            break;
-                        }
-                        if header.len() > 8192 {
-                            break;
-                        }
+        let reader = thread::Builder::new()
+            .name("codex-output".into())
+            .spawn(move || {
+                let mut frames = Frames::default();
+                let mut header = Vec::new();
+                let mut ready = false;
+                let mut bytes = [0; 16 * 1024];
+                while let Ok(count) = output.read(&mut bytes) {
+                    if count == 0 || outgoing.write_all(&bytes[..count]).is_err() {
+                        break;
                     }
+                    let mut start = 0;
                     if !ready {
-                        if header.len() > 8192 || header.ends_with(b"\r\n\r\n") {
-                            break;
+                        for (i, &b) in bytes[..count].iter().enumerate() {
+                            header.push(b);
+                            if header.ends_with(b"\r\n\r\n") {
+                                ready = header.starts_with(b"HTTP/1.1 101 ");
+                                start = i + 1;
+                                break;
+                            }
+                            if header.len() > 8192 {
+                                break;
+                            }
                         }
-                        continue;
+                        if !ready {
+                            if header.len() > 8192 || header.ends_with(b"\r\n\r\n") {
+                                break;
+                            }
+                            continue;
+                        }
+                        header.clear();
                     }
-                    header.clear();
+                    frames.feed(&bytes[start..count], |value| {
+                        let event = incoming_observer
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .response(&value, &session);
+                        if let Some(event) = event {
+                            reporter.report(event);
+                        }
+                    });
                 }
-                frames.feed(&bytes[start..count], |value| {
-                    let event = incoming_observer
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .response(&value, &session);
-                    if let Some(event) = event {
-                        reporter.report(event);
-                    }
-                });
-            }
-            let _ = outgoing.shutdown(Shutdown::Both);
-        });
+                let _ = outgoing.shutdown(Shutdown::Both);
+            })?;
         let mut frames = Frames::default();
         let mut bytes = [0; 16 * 1024];
         while !stop.load(Ordering::Acquire) {
@@ -653,9 +735,13 @@ mod tests {
         close("other-tab", &endpoint);
         assert!(active(SID, &endpoint));
         assert!(!active("other-tab", &endpoint));
+        // A partial handshake must not block another client (the TUI also
+        // keeps a long-lived foreground connection while opening its picker).
+        let mut slow = TcpStream::connect(address).unwrap();
+        slow.write_all(b"GET / HTTP/1.1\r\n").unwrap();
         let mut stream = TcpStream::connect(address).unwrap();
         stream
-            .set_read_timeout(Some(Duration::from_secs(3)))
+            .set_read_timeout(Some(Duration::from_secs(1)))
             .unwrap();
         stream
             .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer wrong\r\n\r\n")
@@ -663,8 +749,49 @@ mod tests {
         let mut response = String::new();
         stream.read_to_string(&mut response).unwrap();
         assert!(response.starts_with("HTTP/1.1 403 "));
+        let mut stalled = vec![slow];
+        for _ in 1..MAX_CONNECTIONS {
+            let mut socket = TcpStream::connect(address).unwrap();
+            socket.write_all(b"GET / HTTP/1.1\r\n").unwrap();
+            stalled.push(socket);
+        }
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let count = LINKS
+                .lock()
+                .unwrap()
+                .get(&endpoint)
+                .unwrap()
+                .connections
+                .lock()
+                .unwrap()
+                .len();
+            if count == MAX_CONNECTIONS {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "auxiliary connections were serialized"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        let mut excess = TcpStream::connect(address).unwrap();
+        excess
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        match excess.read(&mut [0]) {
+            Ok(0) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+            result => panic!("excess connection was not rejected: {result:?}"),
+        }
         close(SID, &endpoint);
         assert!(!active(SID, &endpoint));
+        for mut socket in stalled {
+            socket
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            assert_eq!(socket.read(&mut [0]).unwrap(), 0);
+        }
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline && TcpStream::connect(address).is_ok() {
             thread::sleep(Duration::from_millis(30));

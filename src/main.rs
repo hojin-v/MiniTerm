@@ -13,6 +13,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match args.first().map(String::as_str) {
         Some("--register") => miniterm::notification::register(&exe)?,
         Some("--unregister") => miniterm::notification::unregister(&exe)?,
+        Some("--set-autostart") => {
+            let enabled = match args.get(1).map(String::as_str) {
+                Some("1") => true,
+                Some("0") => false,
+                _ => return Err("--set-autostart 0|1".into()),
+            };
+            let path = miniterm::settings::data_directory()?.join("settings.json");
+            miniterm::settings::Settings::load(&path)?;
+            let previous = miniterm::native::autostart_enabled(&exe)?;
+            miniterm::native::autostart(&exe, enabled)?;
+            if let Err(error) = miniterm::settings::Settings::save_autostart(&path, enabled) {
+                let _ = miniterm::native::autostart(&exe, previous);
+                return Err(error.into());
+            }
+        }
         Some("--cleanup") => {
             miniterm::codex_bash::cleanup_user(&exe)?;
             let links = miniterm::integration::cleanup(&exe);

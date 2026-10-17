@@ -25,9 +25,10 @@ New-Item -ItemType Directory -Path $taskEvidence | Out-Null
 $taskResult = @{runtimeRoot=$taskRuntime;runtimeSha256=$taskRuntimeHash;manifestSha256=(Get-FileHash -LiteralPath (Join-Path $taskRuntime 'miniterm-runtime.json') -Algorithm SHA256).Hash.ToLowerInvariant();installedGitDll=$taskInstalledDll;installedGitSha256=$taskInstalledHash;installedGitControlObserved=[bool]$taskInstalledHash;startedUtc=[DateTime]::UtcNow.ToString('o');checks=@();passed=$false;scope='Real default ShellProfile with runtime next to the test executable; no explicit Bash override. Existing production ConPTY, prompt, Windows bridge and local-provider notification checks; excludes human input, GUI pixels, actual account/model responses, public installation and complete job-control transitions.'}
 foreach ($taskStage in @(
     @{name='Selection';exe=$taskSelection;args='runtime::tests::prepared_bundle_is_selected_by_default_profile --ignored --nocapture --test-threads=1';count=1},
-    @{name='Pty';exe=$taskProduction;args='--ignored --nocapture --test-threads=1 --skip wsl_ --skip git_windows_bridge --skip git_codex_notify';count=8},
+    @{name='Pty';exe=$taskProduction;args='--ignored --nocapture --test-threads=1 --skip wsl_ --skip git_windows_bridge --skip git_codex_notify --skip git_agent_bash';count=9},
     @{name='WindowsBridge';exe=$taskProduction;args='git_windows_bridge --ignored --nocapture --test-threads=1';count=1},
-    @{name='CodexNotify';exe=$taskProduction;args='git_codex_notify --ignored --nocapture --test-threads=1';count=1}
+    @{name='CodexNotify';exe=$taskProduction;args='git_codex_notify --ignored --nocapture --test-threads=1';count=1},
+    @{name='AgentBash';exe=$taskProduction;args='git_agent_bash --ignored --nocapture --test-threads=1';count=2}
 )) {
     $taskStart = New-Object Diagnostics.ProcessStartInfo
     $taskStart.FileName=$taskStage.exe; $taskStart.Arguments=$taskStage.args; $taskStart.WorkingDirectory=$taskRoot
@@ -57,7 +58,11 @@ foreach ($taskStage in @(
 $taskResult.finishedUtc=[DateTime]::UtcNow.ToString('o')
 $taskFinalInstalledHash=if (Test-Path -LiteralPath $taskInstalledDll) { (Get-FileHash -LiteralPath $taskInstalledDll -Algorithm SHA256).Hash } else { $null }
 $taskResult.installedGitUnchanged=$taskInstalledHash -eq $taskFinalInstalledHash
-$taskResult.passed=$taskResult.checks.Count -eq 4 -and @($taskResult.checks | Where-Object { -not $_.passed }).Count -eq 0 -and $taskResult.installedGitUnchanged
+$taskResult.passed=$taskResult.checks.Count -eq 5 -and @($taskResult.checks | Where-Object { -not $_.passed }).Count -eq 0 -and $taskResult.installedGitUnchanged
 [IO.File]::WriteAllText((Join-Path $taskEvidence 'verification.json'),($taskResult | ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
 Write-Output ('Evidence: ' + $taskEvidence)
+[IO.File]::WriteAllText((Join-Path $taskArtifacts 'bundled-runtime-verification.json'),($taskResult | ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
+$taskCompatibility = @{recordedUtc=[DateTime]::UtcNow.ToString('o');profile='default bundled Git';gitVersion=$taskManifest.gitVersion;runtimeSha256=$taskRuntimeHash;allPassed=$taskResult.passed;acceptedForAlpha=$taskResult.passed;passed=if ($taskResult.passed) { 9 } else { 0 };failed=if ($taskResult.passed) { 0 } else { 1 };failedTests=@();checks=$taskResult.checks;scope=$taskResult.scope}
+[IO.File]::WriteAllText((Join-Path $taskArtifacts 'COMPATIBILITY.json'),($taskCompatibility | ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
+if (Test-Path -LiteralPath (Join-Path $taskEvidence 'Pty.log')) { Copy-Item -LiteralPath (Join-Path $taskEvidence 'Pty.log') -Destination (Join-Path $taskArtifacts 'git-compatibility.log') }
 if (-not $taskResult.passed) { throw 'Default bundled runtime verification failed; inspect the recorded logs.' }

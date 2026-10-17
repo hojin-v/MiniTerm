@@ -3030,15 +3030,22 @@ impl MiniTerm {
 }
 
 impl eframe::App for MiniTerm {
-    fn raw_input_hook(&mut self, _ctx: &Context, input: &mut egui::RawInput) {
-        // epaint uses the device's maximum texture side as its font-atlas width.
-        // A 16K-wide atlas wastes resident CPU/upload memory for this small HUD.
-        // Keep glyphs on demand and respect devices with a smaller texture limit.
-        if let Some(side) = &mut input.max_texture_side {
-            *side = (*side).min(4096);
+    fn raw_input_hook(&mut self, ctx: &Context, input: &mut egui::RawInput) {
+        // winit can suppress CursorMoved at the same coordinates after a
+        // CursorLeft caused by collapse/expand. MouseWheel has no position, so
+        // egui otherwise keeps PointerGone until the user moves the mouse.
+        if wheel_needs_pointer_refresh(&input.events) {
+            if let Some([x, y]) = native::cursor_in_client(self.hwnd) {
+                let scale = ctx.pixels_per_point();
+                input
+                    .events
+                    .push(Event::PointerMoved(Pos2::new(x / scale, y / scale)));
+            }
         }
     }
-
+    // Keep the renderer's texture limit for every viewport. eframe's immediate
+    // settings viewport bypasses raw_input_hook; clamping only the root input
+    // rebuilds the shared font atlas mid-frame and invalidates the root's UVs.
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         let frame_start = Instant::now();
         if let Some(deadline) = self.transparency_save_at {
@@ -3601,6 +3608,19 @@ fn take_plain_escape(input: &mut egui::InputState) -> bool {
         true
     });
     pressed
+}
+
+fn wheel_needs_pointer_refresh(events: &[Event]) -> bool {
+    events
+        .iter()
+        .any(|event| matches!(event, Event::MouseWheel { .. }))
+        && !matches!(
+            events
+                .iter()
+                .rev()
+                .find(|event| matches!(event, Event::PointerMoved(_) | Event::PointerGone)),
+            Some(Event::PointerMoved(_))
+        )
 }
 
 fn take_opacity_wheel(input: &mut egui::InputState, current: u16) -> Option<u16> {
@@ -4404,6 +4424,29 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn stationary_wheel_refreshes_pointer_after_resize_without_idle_polling() {
+        let wheel = Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: Vec2::new(0.0, 1.0),
+            modifiers: egui::Modifiers::NONE,
+        };
+        let moved = Event::PointerMoved(Pos2::new(10.0, 50.0));
+        assert!(!wheel_needs_pointer_refresh(&[]));
+        assert!(!wheel_needs_pointer_refresh(&[Event::PointerGone]));
+        assert!(wheel_needs_pointer_refresh(std::slice::from_ref(&wheel)));
+        assert!(wheel_needs_pointer_refresh(&[
+            moved.clone(),
+            Event::PointerGone,
+            wheel.clone()
+        ]));
+        assert!(!wheel_needs_pointer_refresh(&[
+            Event::PointerGone,
+            moved,
+            wheel
+        ]));
+    }
+
     #[test]
     fn wheel_does_not_edit_codex_history_and_opt_in_respects_dec_modes() {
         let fullscreen = TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;

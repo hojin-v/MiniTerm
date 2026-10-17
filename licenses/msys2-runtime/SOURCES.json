@@ -1,19 +1,19 @@
 {
-  "sourceCommit": "7674c51e18b9323c0072c8299c9356a7d9511a4e",
+  "sourceCommit": "b11613e477c006b2ce0332463ed07f1118260e79",
   "files": [
     {
       "path": "CYGWIN_LICENSE",
-      "url": "https://raw.githubusercontent.com/git-for-windows/msys2-runtime/7674c51e18b9323c0072c8299c9356a7d9511a4e/winsup/CYGWIN_LICENSE",
+      "url": "https://raw.githubusercontent.com/cygwin/cygwin/b11613e477c006b2ce0332463ed07f1118260e79/winsup/CYGWIN_LICENSE",
       "sha256": "794433752103cf4bbb4a84a1bdb8fbc150abb1762704bb35fecc9f7f820be984"
     },
     {
       "path": "COPYING.LIB",
-      "url": "https://raw.githubusercontent.com/git-for-windows/msys2-runtime/7674c51e18b9323c0072c8299c9356a7d9511a4e/winsup/COPYING.LIB",
+      "url": "https://raw.githubusercontent.com/cygwin/cygwin/b11613e477c006b2ce0332463ed07f1118260e79/winsup/COPYING.LIB",
       "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768"
     },
     {
       "path": "COPYING",
-      "url": "https://raw.githubusercontent.com/git-for-windows/msys2-runtime/7674c51e18b9323c0072c8299c9356a7d9511a4e/winsup/COPYING",
+      "url": "https://raw.githubusercontent.com/cygwin/cygwin/b11613e477c006b2ce0332463ed07f1118260e79/winsup/COPYING",
       "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
     }
   ]

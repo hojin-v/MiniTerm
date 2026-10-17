@@ -1,11 +1,10 @@
-diff --git a/winsup/cygwin/fhandler/console.cc b/winsup/cygwin/fhandler/console.cc
-index 48c9326..8bfa1ed 100644
 --- a/winsup/cygwin/fhandler/console.cc
 +++ b/winsup/cygwin/fhandler/console.cc
-@@ -55,6 +55,19 @@ static int NO_COPY shared_info_state[MAX_CONS_DEV];
+@@ -54,6 +54,19 @@
+ 
  #define CONS_THREAD_SYNC "cygcons.thread_sync"
  static bool NO_COPY master_thread_started = false;
- 
++
 +/* Called with input_mutex held. Geometry queries and output refresh
 +   con.dwWinSize independently, so use the shared tty size to remember
 +   what was last reported to the foreground process group. */
@@ -18,11 +17,10 @@ index 48c9326..8bfa1ed 100644
 +  ttyp->winsize.ws_col = size.X;
 +  return true;
 +}
-+
+ 
  const unsigned fhandler_console::MAX_WRITE_CHARS = 16384;
  
- fhandler_console::console_state NO_COPY
-@@ -479,10 +492,8 @@ fhandler_console::cons_master_thread (handle_set_t *p, tty *ttyp)
+@@ -509,10 +522,8 @@
  	 Therefore, check windows size every time here. */
        if (!wincap.has_con_24bit_colors () || con_is_legacy)
  	{
@@ -34,7 +32,7 @@ index 48c9326..8bfa1ed 100644
  	    {
  	      con.scroll_region.Top = 0;
  	      con.scroll_region.Bottom = -1;
-@@ -520,10 +531,8 @@ fhandler_console::cons_master_thread (handle_set_t *p, tty *ttyp)
+@@ -550,10 +561,8 @@
  	      processed = process_stop_start (c, ttyp);
  	      break;
  	    case WINDOW_BUFFER_SIZE_EVENT:
@@ -46,7 +44,7 @@ index 48c9326..8bfa1ed 100644
  		{
  		  con.scroll_region.Top = 0;
  		  con.scroll_region.Bottom = -1;
-@@ -1058,11 +1067,9 @@ fhandler_console::fix_tab_position (HANDLE h, DWORD owner)
+@@ -1223,11 +1232,9 @@
  bool
  fhandler_console::send_winch_maybe ()
  {
@@ -59,7 +57,7 @@ index 48c9326..8bfa1ed 100644
      {
        con.scroll_region.Top = 0;
        con.scroll_region.Bottom = -1;
-@@ -1259,6 +1266,7 @@ fhandler_console::process_input_message (void)
+@@ -1430,6 +1437,7 @@
    termios *ti = &(get_ttyp ()->ti);
  
    fhandler_console::input_states stat = input_processing;
@@ -67,7 +65,7 @@ index 48c9326..8bfa1ed 100644
    DWORD total_read, i;
    INPUT_RECORD input_rec[INREC_SIZE];
  
-@@ -1616,12 +1624,21 @@ fhandler_console::process_input_message (void)
+@@ -1806,12 +1814,21 @@
  	  break;
  
  	case WINDOW_BUFFER_SIZE_EVENT:
@@ -95,10 +93,10 @@ index 48c9326..8bfa1ed 100644
  	default:
  	  continue;
  	}
-@@ -1661,6 +1678,15 @@ out:
-       release_attach_mutex ();
-       con.num_processed -= min (con.num_processed, discarded);
-     }
+@@ -1847,6 +1864,15 @@
+     discard_len = 0;
+   if (discard_len)
+     discard_key_events (discard_len);
 +  /* SIGWINCH releases input_mutex. Consume the peeked record first so
 +     another console master cannot remove it before our discard. */
 +  if (notify_resize_after_discard)
@@ -111,7 +109,7 @@ index 48c9326..8bfa1ed 100644
    return stat;
  }
  
-@@ -1844,6 +1870,13 @@ fhandler_console::open (int flags, mode_t)
+@@ -2056,6 +2082,13 @@
  
    if (con.fillin (get_output_handle ()))
      {
