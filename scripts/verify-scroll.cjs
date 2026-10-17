@@ -19,6 +19,7 @@ const {spawn,spawnSync} = require('node:child_process');
   // Establish the fixture's own project root, so trusting it cannot target the repository.
   fs.mkdirSync(path.join(work, '.git'));
   const requests = [];
+  const receivedPrompts = [];
   const server = http.createServer((request, response) => {
     let body = '';
     request.on('data', data => { body += data; });
@@ -29,6 +30,11 @@ const {spawn,spawnSync} = require('node:child_process');
       const payload=JSON.parse(body);
       requests.push(payload);
       fs.writeFileSync(path.join(root, 'requests.json'), JSON.stringify(requests, null, 2));
+      for(const part of ((payload.input||[]).filter(i=>i.role==='user').at(-1)?.content||[])){
+        if(part.type==='input_text' && typeof part.text==='string')receivedPrompts.push(part.text);
+      }
+      fs.writeFileSync(path.join(root,'received-prompts.tmp'),JSON.stringify(receivedPrompts));
+      fs.renameSync(path.join(root,'received-prompts.tmp'),path.join(root,'received-prompts.json'));
       const firstTurn=((payload.input||[]).filter(i=>i.role==='user').at(-1)?.content||[]).some(p=>p.text==='SCROLL-FIRST-TURN');
       const cancelTurn=((payload.input||[]).filter(i=>i.role==='user').at(-1)?.content||[]).some(p=>p.text==='SCROLL-CANCEL-TURN');
       const toolOutput=(payload.input||[]).some(i=>i.type==='function_call_output'&&i.call_id==='call_scroll_environment');

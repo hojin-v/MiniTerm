@@ -26,6 +26,11 @@ public static class MiniTermScrollProbe {
  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
  [DllImport("user32.dll")] public static extern bool GetCursorPos(out Point p);
  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y);
+ [DllImport("kernel32.dll")] static extern IntPtr OpenThread(uint access,bool inherit,uint id);
+ [DllImport("kernel32.dll")] static extern int GetThreadDescription(IntPtr thread,out IntPtr description);
+ [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+ [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr memory);
+ public static string ThreadName(uint id) {var handle=OpenThread(0x800,false,id);if(handle==IntPtr.Zero)return "";try {IntPtr name;if(GetThreadDescription(handle,out name)!=0)return "";try{return Marshal.PtrToStringUni(name);}finally{LocalFree(name);}}finally{CloseHandle(handle);}}
  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(Point p);
  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
  [DllImport("user32.dll")] public static extern void mouse_event(uint flags,uint x,uint y,uint data,UIntPtr extra);
@@ -76,6 +81,7 @@ function New-ScrollStart([string]$Arguments) {
  if(-not (Test-Path -LiteralPath $taskVtNode)){throw 'Installed VT-capable AI Battery Node is required.'}
  $taskStart.EnvironmentVariables['PATH']=(Split-Path -Parent $taskVtNode)+';'+$env:PATH
  foreach ($taskName in @('OPENAI_API_KEY','CODEX_API_KEY','OPENAI_BASE_URL','MINITERM_CODEX_INLINE','MINITERM_SESSION_ID','MINITERM_NOTIFY_EXE','MINITERM_METRICS_PATH','MINITERM_AGENT_BASH','MINITERM_CODEX_SESSION_NOTIFY','CODEX_DAEMON_SHUTDOWN_SOCKET','CODEX_SESSION_ID','CODEX_THREAD_ID','AI_BATTERY_WRAPPED_CODEX','AI_BATTERY_DISABLE_WINDOWS_CODEX_RUNNER','AI_BATTERY_WIN_LAYOUT','AI_BATTERY_ACTIVE_LAYOUT','AI_BATTERY_ORIGINAL_CODEX')) { $taskStart.EnvironmentVariables.Remove($taskName) }
+ $taskStart.EnvironmentVariables['MINITERM_METRICS_PATH']=Join-Path $taskFixture ('metrics-'+[guid]::NewGuid().ToString('N')+'.json')
  if($BatteryLayout -eq 'direct'){
   $taskDirect=Join-Path $env:APPDATA 'npm/node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
   if(-not (Test-Path -LiteralPath $taskDirect)){throw 'Installed native Codex is required.'}
@@ -203,11 +209,10 @@ function Wait-ScrollRequests([string]$Prompt) {
  $taskDeadline=[DateTime]::UtcNow.AddSeconds(20)
  do {
   Start-Sleep -Milliseconds 100
-  $taskRequests=Get-Content -LiteralPath (Join-Path $taskFixture 'requests.json') -Encoding UTF8 -Raw | ConvertFrom-Json
-  foreach($taskRequest in @($taskRequests)){
-   $taskLastUser=@($taskRequest.input | Where-Object role -eq 'user') | Select-Object -Last 1
-   if(@($taskLastUser.content | Where-Object {$_.type -eq 'input_text' -and $_.text -eq $Prompt}).Count -gt 0){Start-Sleep -Milliseconds 1500;return}
-  }
+  $taskLedger=Join-Path $taskFixture 'received-prompts.json'
+  if(-not (Test-Path -LiteralPath $taskLedger)){continue}
+  $taskPrompts=Get-Content -LiteralPath $taskLedger -Encoding UTF8 -Raw | ConvertFrom-Json
+  if(@($taskPrompts) -contains $Prompt){Start-Sleep -Milliseconds 1500;return}
  }while([DateTime]::UtcNow -lt $taskDeadline)
  throw "Owned provider did not receive prompt $Prompt."
 }
@@ -379,7 +384,10 @@ try {
   Save-ScrollImage 'after-cancel-response.png'
  }
  if($env:MINITERM_SCROLL_IDLE_SECONDS -eq '30'){
+  $taskThreadBefore=@{};$taskApp.Refresh();foreach($taskThread in $taskApp.Threads){$taskThreadBefore[$taskThread.Id]=$taskThread.TotalProcessorTime.TotalSeconds}
   & (Join-Path $PSScriptRoot 'measure-idle.ps1') -ProcessId $taskApp.Id -Seconds 30 -OutputPath (Join-Path $taskFixture 'codex-idle.json')|Out-Null
+  $taskApp.Refresh();$taskThreadCpu=@($taskApp.Threads | ForEach-Object {@{id=$_.Id;name=[MiniTermScrollProbe]::ThreadName($_.Id);cpuSeconds=$_.TotalProcessorTime.TotalSeconds-$taskThreadBefore[$_.Id]}} | Sort-Object cpuSeconds -Descending)
+  [IO.File]::WriteAllText((Join-Path $taskFixture 'idle-threads.json'),($taskThreadCpu | ConvertTo-Json),[Text.UTF8Encoding]::new($false))
  }
  Close-ScrollGui
  if($Retry){

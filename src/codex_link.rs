@@ -480,6 +480,10 @@ fn relay(
     job_slot: &Mutex<Option<Arc<crate::native::ProcessJob>>>,
     connection: &str,
 ) -> std::io::Result<()> {
+    // Winsock accept inherits the nonblocking listener's socket mode. Timeouts
+    // do not restore blocking reads: without this, idle WouldBlock retries spin
+    // on one CPU core for every active TUI connection.
+    stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_millis(200)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     stream.set_nodelay(true)?;
@@ -712,6 +716,60 @@ mod tests {
             let event = observer.response(&json!({"method":"turn/completed","params":{"threadId":id,"turn":{"id":"t","status":"completed"}}}), SID);
             assert_eq!(event.is_some(), id == "main");
         }
+    }
+    #[test]
+    fn idle_relay_waits_on_the_socket_instead_of_spinning() {
+        use windows_sys::Win32::{
+            Foundation::FILETIME,
+            System::Threading::{GetCurrentThread, GetThreadTimes},
+        };
+        fn cpu_time() -> u64 {
+            let mut times: [FILETIME; 4] = unsafe { std::mem::zeroed() };
+            let [created, exited, kernel, user] = &mut times;
+            assert_ne!(
+                unsafe { GetThreadTimes(GetCurrentThread(), created, exited, kernel, user) },
+                0
+            );
+            let ticks =
+                |time: &FILETIME| ((time.dwHighDateTime as u64) << 32) | time.dwLowDateTime as u64;
+            ticks(kernel) + ticks(user)
+        }
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        // Explicitly reproduce Winsock's inherited accept mode.
+        stream.set_nonblocking(true).unwrap();
+        client.write_all(b"GET / HTTP/1.1\r\n").unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = stop.clone();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            let cpu_before = cpu_time();
+            let start = Instant::now();
+            ready_tx.send(()).unwrap();
+            relay(
+                stream,
+                "token",
+                SID,
+                &[],
+                Path::new("C:/"),
+                Path::new("C:/"),
+                &BTreeMap::new(),
+                &worker_stop,
+                &Mutex::new(None),
+                "fixture",
+            )
+            .unwrap();
+            (start.elapsed(), cpu_time() - cpu_before)
+        });
+        ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        thread::sleep(Duration::from_millis(400));
+        stop.store(true, Ordering::Release);
+        let (elapsed, cpu) = worker.join().unwrap();
+        assert!(elapsed >= Duration::from_millis(350));
+        assert!(elapsed < Duration::from_secs(2));
+        assert!(cpu < 500_000, "idle relay consumed {}ms CPU", cpu / 10_000);
     }
     #[test]
     fn local_endpoint_rejects_wrong_tokens_and_other_tabs_cannot_close_it() {

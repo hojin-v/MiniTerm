@@ -105,6 +105,7 @@ jobs:
             artifacts/COMPATIBILITY.json
             artifacts/git-compatibility.log
             artifacts/native-installer-verification.json
+            artifacts/installer-ui-verification.json
             artifacts/bundled-runtime-verification.json
       - name: Package artifact
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5

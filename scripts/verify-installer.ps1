@@ -92,6 +92,10 @@ if ($InstallerPath) {
     Assert-Options $false $true $true
     Invoke-NativeInstaller $taskInstaller @('/S','/STARTMENU=1','/DESKTOP=0','/AUTOSTART=0',('/D=' + $taskInstall))
     Assert-Options $true $false $false
+    & (Join-Path $PSScriptRoot 'verify-installer-ui.ps1') -InstallerPath $taskInstaller -InstallDirectory $taskInstall
+    Assert-Options $true $true $true
+    Invoke-NativeInstaller $taskInstaller @('/S','/STARTMENU=1','/DESKTOP=0','/AUTOSTART=0',('/D=' + $taskInstall))
+    Assert-Options $true $false $false
     # Unknown files must survive removal; installers own only their inventory.
     [IO.File]::WriteAllText((Join-Path $taskInstall 'user-kept.txt'),'preserve')
 }

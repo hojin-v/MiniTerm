@@ -43,7 +43,7 @@ Rust 네이티브 UI와 DX12 렌더링, ConPTY를 사용합니다. 앱 실행에
 
 | Environment | Status | Requirement |
 | --- | --- | --- |
-| Windows 11 x64 + Git Bash | 기본 테스트 대상 | Git for Windows, DX12 지원 드라이버 |
+| Windows 11 x64 + Git Bash | 기본 테스트 대상 | 포함된 전용 Bash, DX12 지원 드라이버 |
 | WSL2 Bash | 선택 프로필·검증 진행 중 | 설치된 WSL2 배포판; 현재 개발 장치에서 서비스 오류가 남음 |
 | Windows ARM64 / Windows 10 | 지원 대상 아님 | x64 설치본 제공 |
 | Linux / macOS | 제공하지 않음 | Windows 전용 앱 |
@@ -58,21 +58,21 @@ winget install miniterm
 
 등록 후 `winget install MiniTerm`은 같은 이름으로, `winget install hnode.miniterm`은 패키지 ID로 검색합니다. 기본 검색은 대소문자를 구분하지 않습니다.
 
-[GitHub Releases](https://github.com/hojin-v/MiniTerm/releases/tag/v0.1.0-alpha.7)에서 수정본 `v0.1.0-alpha.7`의 설치본과 ZIP을 받을 수 있습니다.
+[GitHub Releases](https://github.com/hojin-v/MiniTerm/releases/tag/v0.1.0-alpha.8)에서 수정본 `v0.1.0-alpha.8`의 설치본과 ZIP을 받을 수 있습니다.
 
 | Download | Use |
 | --- | --- |
-| `MiniTerm-0.1.0-alpha.7-windows-x64-setup.exe` | 권장 사용자별 설치. 관리자 권한 불필요 |
-| `MiniTerm-0.1.0-alpha.7-windows-x64.zip` | 압축을 풀고 `miniterm.exe` 실행. 설치·알림 등록은 자동 수행하지 않음 |
+| `MiniTerm-0.1.0-alpha.8-windows-x64-setup.exe` | 사용자별 설치. 시작 메뉴·바탕화면·로그인 시 실행 선택, 완료 후 바로 실행 |
+| `MiniTerm-0.1.0-alpha.8-windows-x64.zip` | 폴더 전체를 풀고 `miniterm.exe` 실행. 설치·알림 등록은 자동 수행하지 않음 |
 | `SHA256SUMS` | 다운로드 파일의 무결성 확인 |
 
-Git for Windows와 [Microsoft Visual C++ v14 x64 런타임](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)을 별도로 준비해야 합니다. 실행 파일에서 `VCRUNTIME140.dll` 의존성을 확인했습니다. 설치본은 서명되지 않았으며 Windows에서 게시자를 확인할 수 없다는 안내가 나올 수 있습니다. 백신을 끄거나 경고를 일괄 우회하는 방식은 안내하지 않습니다.
+[Microsoft Visual C++ v14 x64 런타임](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)을 별도로 준비해야 합니다. 설치본·ZIP에는 입력 누락 수정을 적용한 전용 Bash가 포함됩니다. 실행 파일에서 `VCRUNTIME140.dll` 의존성을 확인했습니다. 설치본은 서명되지 않았으며 Windows에서 게시자를 확인할 수 없다는 안내가 나올 수 있습니다. 백신을 끄거나 경고를 일괄 우회하는 방식은 안내하지 않습니다.
 
 설정은 설치본과 ZIP 모두 `%LOCALAPPDATA%\MiniTerm\settings.json`을 사용합니다. ZIP은 설정까지 독립적인 포터블 모드가 아닙니다. 자세한 설치·업데이트·복구 절차는 [테스터 안내](docs/TESTER_GUIDE.md)를 확인하세요.
 
 ## Quick Start
 
-1. Git for Windows와 Microsoft Visual C++ v14 x64 런타임을 준비하고 MiniTerm 설치본 또는 ZIP을 실행합니다.
+1. Microsoft Visual C++ v14 x64 런타임을 준비하고 MiniTerm 설치본 또는 ZIP을 실행합니다. 설치 중 시작 메뉴·바탕화면·로그인 시 실행을 선택하고 완료 화면에서 바로 실행할 수 있습니다.
 2. 작은 창을 클릭하고 아래 명령으로 입력과 출력을 확인합니다.
 
    ```bash
@@ -163,13 +163,16 @@ cd MiniTerm
 ./scripts/cargo.ps1 -CargoArguments @('fmt','--all','--','--check')
 ./scripts/cargo.ps1 -CargoArguments @('clippy','--locked','--all-targets','--','-D','warnings')
 ./scripts/build.ps1
-./scripts/package.ps1 -SkipBuild -ReleaseTag v0.1.0-alpha.7
+python scripts/build-bash-runtime.py
+./scripts/prepare-bash-runtime.ps1 -PatchedDll artifacts/runtime-build/msys-2.0.dll -BuildReceipt artifacts/runtime-build/BUILD_RECEIPT.json -ApplicationDirectory artifacts/bundled-application
+./scripts/verify-bash-runtime.ps1 -ApplicationDirectory artifacts/bundled-application
+./scripts/package.ps1 -SkipBuild -ReleaseTag v0.1.0-alpha.8
 ```
 
-Rust가 없으면 `./scripts/bootstrap-rust.ps1`로 프로젝트 `.tools`에 설치할 수 있습니다. `./scripts/test.ps1 -Pty`는 실제 Git Bash 호환성을 검사하며 현재 알려진 리사이즈 문제가 재현될 수 있습니다. GitHub CI는 이 결과를 별도 기록하고 알파의 한계를 공개합니다.
+Rust가 없으면 `./scripts/bootstrap-rust.ps1`로 프로젝트 `.tools`에 설치할 수 있습니다. `./scripts/test.ps1 -Pty`는 설치된 Git Bash를 검사합니다. 배포 CI는 전용 런타임을 소스에서 빌드하고 기본 프로필 호환성 전체 통과와 실제 설치·업데이트·제거 검사를 요구합니다. [런타임 소스·빌드](docs/BUNDLED_RUNTIME.md)를 참고하세요.
 
 배포 파일은 `artifacts/`에 생성하며 Git에 커밋하지 않습니다. 개발 세션을 이어받을 때는 [세션 인계 기준](docs/SESSION_HANDOFF.md)부터 확인하세요. [배포 절차](docs/DISTRIBUTION.md), [성능 설계](docs/PERFORMANCE.md), [구현 기록](docs/IMPLEMENTATION.md)을 참고하세요.
 
 ## License
 
-[MIT](LICENSE). 설치본과 ZIP에는 Rust 의존성의 고지 문서를 포함합니다. Git for Windows, CLI 에이전트와 AI Battery는 별도 프로젝트입니다.
+[MIT](LICENSE). 설치본과 ZIP에는 Rust 의존성과 포함된 Bash/Git/MSYS의 고지·라이선스를 포함합니다. 수정 MSYS 런타임의 전체 소스와 빌드 기록은 같은 릴리스에 제공합니다. CLI 에이전트와 AI Battery는 별도 프로젝트입니다.

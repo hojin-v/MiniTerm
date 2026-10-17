@@ -215,6 +215,7 @@ Section "MiniTerm" Main
     Delete "$SMPROGRAMS\MiniTerm.lnk"
   ${EndIf}
   ${If} $DesktopChoice == 1
+    CreateDirectory "$DESKTOP"
     CreateShortCut "$DESKTOP\MiniTerm.lnk" "$INSTDIR\miniterm.exe" "" "$INSTDIR\miniterm.exe" 0 SW_SHOWNORMAL "" "MiniTerm · Bash HUD"
   ${Else}
     Delete "$DESKTOP\MiniTerm.lnk"

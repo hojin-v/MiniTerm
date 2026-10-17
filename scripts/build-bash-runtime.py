@@ -131,7 +131,10 @@ export CXXFLAGS="-O2 -pipe -g0"
 "$src/configure" --prefix=/usr --build=x86_64-pc-cygwin --sysconfdir=/etc --disable-doc --disable-dumper --with-msys2-runtime-commit="$3"
 ''', source, build, LOCK['upstreamRuntimeCommit'])
     run('newlib', 'cd "$(cygpath -u "$1")"; make -j2 all-target-newlib configure-target-winsup', build)
-    run('runtime', 'cd "$(cygpath -u "$1")/x86_64-pc-cygwin/winsup/cygwin"; make -j2 new-msys-2.0.dll', build)
+    run('runtime', '''cd "$(cygpath -u "$1")/x86_64-pc-cygwin/winsup/cygwin"
+make -j2 child_info_magic.h shared_info_magic.h globals.h localtime.patched.c config.h
+make -j2 new-msys-2.0.dll
+''', build)
     dll = build / 'x86_64-pc-cygwin/winsup/cygwin/new-msys-2.0.dll'
     shutil.copy2(dll, stage / 'msys-2.0.dll')
     receipt = {key: LOCK[key] for key in ('msysSourceCommit', 'recipeCommit', 'sdkCommit', 'patchSha256', 'upstreamRuntimeCommit', 'sourceDateEpoch')}
