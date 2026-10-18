@@ -274,13 +274,20 @@ impl MiniTerm {
                         "sample-summary",
                         "sample-summary-command",
                         "sample-scroll",
+                        "fixture-expand",
+                        "fixture-collapse",
+                        "fixture-view",
+                        "fixture-battery-above",
+                        "fixture-battery-bottom",
+                        "fixture-finish",
+                        "fixture-exit",
                     ]
                     .contains(&command.as_str())
                         && fixture_key.is_none()
                     {
                         return ipc::Reply::error("지원하지 않는 진단 명령입니다.");
                     }
-                    if fixture_key.is_some() && !isolated {
+                    if (fixture_key.is_some() || command.starts_with("fixture-")) && !isolated {
                         return ipc::Reply::error(
                             "키 입력 시험은 별도 진단 세션에서만 사용할 수 있습니다.",
                         );
@@ -619,7 +626,8 @@ impl MiniTerm {
                 broker.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
             }
             let _ = tx.send(result);
-            ctx.request_repaint();
+            ctx.request_repaint_of(egui::ViewportId::ROOT);
+            native::wake_hidden(hwnd);
         });
     }
 
@@ -1622,6 +1630,22 @@ impl MiniTerm {
         let baseline = (height - reference.size().y).max(0.0) * 0.5 + galley_baseline(&reference);
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         self.record_widget("terminal", rect);
+        let battery = session
+            .battery()
+            .filter(|_| !mini || self.settings.window.mini_show_battery);
+        let battery_rect = battery.as_ref().map(|_| {
+            Rect::from_min_max(
+                Pos2::new(rect.left(), rect.bottom() - height),
+                rect.right_bottom(),
+            )
+        });
+        let rect = Rect::from_min_max(
+            rect.min,
+            Pos2::new(
+                rect.right(),
+                battery_rect.map_or(rect.bottom(), |footer| footer.top()),
+            ),
+        );
         self.display_watch.set_body_region(
             (!self.settings_open
                 && !self.notices_open
@@ -1675,7 +1699,12 @@ impl MiniTerm {
                 .sessions
                 .get(&session.id)
                 .and_then(|status| status.progress.record());
-            session.summary().with_report(report)
+            let mut snapshot = session.summary().with_report(report);
+            // Battery is rendered separately from both compact view modes.
+            snapshot.battery_row = None;
+            snapshot.battery_text = None;
+            snapshot.battery_columns = None;
+            snapshot
         });
         let render_rect = summary_snapshot
             .as_ref()
@@ -1709,6 +1738,12 @@ impl MiniTerm {
             };
             (start..start + rows).map(|r| r - offset as i32).collect()
         };
+        let battery_source = battery
+            .as_ref()
+            .and_then(|row| crate::battery::Row::capture(&*term, row.line).map(|_| row.line));
+        if let Some(source) = battery_source.filter(|_| !mini && offset == 0) {
+            visible_rows.retain(|row| *row != source);
+        }
         let render_rect = if mini && !summary {
             Rect::from_min_max(
                 Pos2::new(
@@ -2072,6 +2107,9 @@ impl MiniTerm {
                 column_start -= 1;
             }
         }
+        if let Some(source) = battery_source.filter(|_| !mini && paint_offset == 0) {
+            visible_rows.retain(|row| *row != source);
+        }
         if paint_offset > 0 {
             self.record_widget("terminal-scrolled", render_rect);
         }
@@ -2290,7 +2328,8 @@ impl MiniTerm {
                 output.ime = Some(egui::output::IMEOutput { rect, cursor_rect })
             });
             if !self.composition.is_empty() {
-                let galley = painter.layout_no_wrap(self.composition.clone(), font, Color32::WHITE);
+                let galley =
+                    painter.layout_no_wrap(self.composition.clone(), font.clone(), Color32::WHITE);
                 let preedit_rect = Rect::from_min_size(cursor_pos, galley.size());
                 painter.rect_filled(preedit_rect, 0.0, Color32::from_rgb(47, 85, 92));
                 let pos = terminal_text_pos(cursor_pos, &galley, baseline);
@@ -2308,6 +2347,21 @@ impl MiniTerm {
             .take()
         {
             self.error = Some(error);
+        }
+        if let (Some(battery), Some(rect)) = (battery, battery_rect) {
+            self.record_widget("terminal-battery", rect);
+            if summary {
+                self.record_widget("summary-battery", rect);
+            }
+            paint_battery(
+                ui,
+                &battery,
+                rect,
+                &font,
+                baseline,
+                Vec2::new(width, height),
+                self.settings.theme == "light",
+            );
         }
         if body_expansion {
             self.expand(!self.expanded);
@@ -3068,6 +3122,9 @@ impl eframe::App for MiniTerm {
         while let Ok(action) = self.actions.try_recv() {
             match action {
                 Action::Show => {
+                    if self.sessions.is_empty() && self.starting == 0 {
+                        self.start_session(ctx);
+                    }
                     native::show(self.hwnd, true);
                     self.terminal_focus = true;
                 }
@@ -3168,6 +3225,26 @@ impl eframe::App for MiniTerm {
                         }
                     }
                     "new-session" => self.start_session(ctx),
+                    "fixture-expand" => self.expand(true),
+                    "fixture-collapse" => self.expand(false),
+                    "fixture-view" => self.toggle_mini_view(),
+                    "fixture-battery-above" | "fixture-battery-bottom" => {
+                        if let Some(session) = self.sessions.get(self.selected) {
+                            let rows = session.term.lock().screen_lines().max(4);
+                            let battery_row = if command.ends_with("bottom") { rows } else { 2 };
+                            let text = format!("HISTFILE=/dev/null; HISTSIZE=0; printf '\\033[2J\\033[H\\0337\\033[{battery_row};1HCodex \\033[32m❚❚❚❚\\033[90m❚❚\\033[0m 67%% | Claude \\033[32m❚❚❚❚❚❚\\033[0m 90%%\\0338\\033[{};1H› '; builtin read -r __miniterm_fixture\r", rows.saturating_sub(2));
+                            let _ = session.input.send(text.into_bytes());
+                        }
+                    }
+                    "fixture-finish" | "fixture-exit" => {
+                        if let Some(session) = self.sessions.get(self.selected) {
+                            let _ = session.input.send(if command.ends_with("exit") {
+                                b"exit\r".to_vec()
+                            } else {
+                                b"\r".to_vec()
+                            });
+                        }
+                    }
                     "quit" => {
                         self.quit = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -3177,6 +3254,9 @@ impl eframe::App for MiniTerm {
             }
         }
         if self.display_watch.take_shortcut() {
+            if self.sessions.is_empty() && self.starting == 0 {
+                self.start_session(ctx);
+            }
             self.terminal_focus = true;
             self.close_settings();
         }
@@ -3477,6 +3557,66 @@ impl eframe::App for MiniTerm {
             self.frame_samples
                 .push(frame_start.elapsed().as_secs_f64() * 1000.0);
         }
+    }
+}
+
+fn paint_battery(
+    ui: &mut egui::Ui,
+    row: &crate::battery::Row,
+    rect: Rect,
+    font: &FontId,
+    baseline: f32,
+    cell_size: Vec2,
+    light: bool,
+) {
+    let painter = ui.painter().with_clip_rect(rect);
+    painter.rect_filled(rect, 0.0, background(light));
+    let width = cell_size.x;
+    for (column, cell) in row.cells.iter().enumerate() {
+        let pos = rect.min + Vec2::new(column as f32 * width, 0.0);
+        if pos.x >= rect.right() {
+            break;
+        }
+        let (_, bg) = resolve_cell_colors(cell.fg, cell.bg, cell.flags, &row.colors, light);
+        if bg != background(light) {
+            painter.rect_filled(Rect::from_min_size(pos, cell_size), 0.0, bg);
+        }
+    }
+    // Paint all backgrounds first so a spacer cannot cover a wide glyph.
+    for (column, cell) in row.cells.iter().enumerate() {
+        let pos = rect.min + Vec2::new(column as f32 * width, 0.0);
+        if pos.x >= rect.right() {
+            break;
+        }
+        let (fg, _) = resolve_cell_colors(cell.fg, cell.bg, cell.flags, &row.colors, light);
+        if cell
+            .flags
+            .intersects(Flags::HIDDEN | Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+        {
+            continue;
+        }
+        let text: String = std::iter::once(cell.c)
+            .chain(cell.zerowidth().into_iter().flatten().copied())
+            .collect();
+        let face = if cell.flags.contains(Flags::BOLD) {
+            FontId::new(font.size, FontFamily::Name("terminal-bold".into()))
+        } else {
+            font.clone()
+        };
+        let galley = painter.layout_no_wrap(
+            text,
+            face,
+            if cell.flags.contains(Flags::DIM) {
+                fg.gamma_multiply(0.66)
+            } else {
+                fg
+            },
+        );
+        painter.galley(terminal_text_pos(pos, &galley, baseline), galley, fg);
+    }
+    if row.cells.len() as f32 * width > rect.width() {
+        ui.interact(rect, ui.id().with("battery-footer"), Sense::hover())
+            .on_hover_text(&row.text);
     }
 }
 

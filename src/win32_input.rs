@@ -8,10 +8,13 @@ pub struct Decoder {
     state: u8,
     csi: Vec<u8>,
     osc: bool,
+    osc_text: Vec<u8>,
     pub active: bool,
+    pub prompt_started: bool,
 }
 impl Decoder {
     pub fn advance(&mut self, bytes: &[u8]) {
+        self.prompt_started = false;
         for &byte in bytes {
             match self.state {
                 0 => {
@@ -26,6 +29,7 @@ impl Decoder {
                     }
                     b']' | b'P' | b'X' | b'^' | b'_' => {
                         self.osc = byte == b']';
+                        self.osc_text.clear();
                         self.state = 3;
                     }
                     b'c' => {
@@ -61,11 +65,15 @@ impl Decoder {
                     if byte == 27 {
                         self.state = 4;
                     } else if byte == 7 && self.osc {
+                        self.prompt_started |= self.osc_text == b"133;A";
                         self.state = 0;
+                    } else if self.osc && self.osc_text.len() < 32 {
+                        self.osc_text.push(byte);
                     }
                 }
                 4 => {
                     if byte == b'\\' || (byte == 7 && self.osc) {
+                        self.prompt_started |= self.osc && self.osc_text == b"133;A";
                         self.state = 0;
                     } else if byte != 27 {
                         self.state = 3;

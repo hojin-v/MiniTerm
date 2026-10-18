@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod agent_shell;
 pub mod app;
+mod battery;
 pub mod brand;
 pub mod codex_bash;
 pub mod codex_link;

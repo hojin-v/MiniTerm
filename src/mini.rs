@@ -334,7 +334,7 @@ pub fn activity_label(text: &str) -> String {
     )
 }
 
-fn battery(text: &str) -> bool {
+pub(crate) fn battery(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     (lower.starts_with("ai battery")
         || lower.starts_with("ai-battery")
@@ -492,6 +492,12 @@ pub fn preview_rows<T: EventListener>(term: &Term<T>, count: usize, input: bool)
     for line in (0..cursor).rev() {
         if rows.len() == limit {
             break;
+        }
+        let text: String = (0..term.columns().min(512))
+            .map(|col| term.grid()[Line(line)][Column(col)].c)
+            .collect();
+        if battery(text.trim()) {
+            continue;
         }
         if (0..term.columns()).any(|col| {
             let cell = &term.grid()[Line(line)][Column(col)];

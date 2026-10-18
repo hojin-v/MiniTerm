@@ -1,6 +1,7 @@
 ﻿param([Parameter(Mandatory=$true)][string]$Fixture,[string]$BatteryLayout='', [string]$Executable='artifacts/miniterm.exe',[switch]$Shared,[switch]$Retry,[switch]$CodexNotify)
 $ErrorActionPreference='Stop'
 $Streaming=$env:MINITERM_SCROLL_STREAMING -eq '1'
+$Footer=$env:MINITERM_SCROLL_FOOTER -eq '1'
 $taskRoot=Split-Path -Parent $PSScriptRoot
 $taskExecutable=[IO.Path]::GetFullPath((Join-Path $taskRoot $Executable))
 $taskFixture=[IO.Path]::GetFullPath($Fixture)
@@ -134,6 +135,12 @@ function Save-ScrollImage([string]$Name) {
 }
 
 function Get-ScrollState { (Invoke-Scroll 'sessions') | ConvertFrom-Json }
+function Assert-ScrollFooter([string]$Phase) {
+ $taskState=Get-ScrollState
+ $taskBattery=$taskState.details.ui.'terminal-battery';$taskBody=$taskState.details.ui.terminal
+ if(!$taskBattery -or [Math]::Abs($taskBattery[3]-$taskBody[3]) -gt 1.5){throw "Missing bottom battery footer: $Phase"}
+ [IO.File]::WriteAllText((Join-Path $taskFixture ("footer-$Phase.json")),($taskState|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
+}
 function Wait-ScrollSettled {
  $taskDeadline=[DateTime]::UtcNow.AddSeconds(8)
  $taskPrevious=(Get-ScrollState).details.terminalScroll
@@ -273,6 +280,7 @@ try {
  Start-Sleep -Milliseconds 3500
  Save-ScrollImage 'codex-startup.png'
  Save-ConsoleMode 'startup'
+ if($Footer){Assert-ScrollFooter 'startup'}
  [MiniTermScrollProbe]::Text($taskWindow,'SCROLL-FIRST-TURN')
  # Separate typing from Enter: Codex's paste-burst detection otherwise consumes
  # an immediately following Enter as part of synthetic pasted input.
@@ -337,6 +345,7 @@ try {
  if(-not $Streaming){[MiniTermScrollProbe]::Text($taskWindow,'SCROLL-DRAFT-KEEP')}
  Start-Sleep -Milliseconds 150
  Save-ScrollImage 'before-wheel.png'
+ if($Footer){Assert-ScrollFooter 'after-input'}
  $taskBefore=Get-ScrollState
  Wheel 1200
  $taskUp=Get-ScrollState
@@ -356,8 +365,10 @@ try {
  if($taskMiniUp.details.terminalScroll.displayOffset -le 0){throw 'Compact wheel did not move into history.'}
  Wheel -1200
  if((Get-ScrollState).details.terminalScroll.displayOffset -ne 0){throw 'Compact wheel did not return to live input.'}
+ if($Footer){Assert-ScrollFooter 'compact'}
  Invoke-Scroll 'diagnostic expand' | Out-Null
  Start-Sleep -Milliseconds 650
+ if($Footer){Assert-ScrollFooter 'after-expand-without-input'}
  [MiniTermScrollProbe]::Text($taskWindow,'-TAIL')
  Start-Sleep -Milliseconds 600
  [MiniTermScrollProbe]::Press($taskWindow,13)
@@ -449,6 +460,7 @@ try {
  foreach($taskUserApp in $taskUserApps){$taskExisting=Get-Process -Id $taskUserApp.id -ErrorAction Stop;if($taskExisting.StartTime -ne $taskUserApp.started){throw 'Existing app identity changed.'}}
  $taskResult=@{fixture=$taskFixture;executableSha256=(Get-FileHash -LiteralPath $taskExecutable -Algorithm SHA256).Hash;batteryLayout=$BatteryLayout;sharedBackendRequested=[bool]$Shared;actualCodex=$true;wheelInput='native_WM_MOUSEWHEEL';wheelUp=$true;wheelDown=$true;compactWheel=$true;sessionPreserved=$true;sharedResumeChecked=[bool]$Retry;retryWhileOwnedWriterActive=[bool]$Retry;retryAfterOwnedWriterReleased=[bool]$Retry;scope='Real GUI and installed CLI; targeted Win32 wheel messages through winit/egui. Own localhost fixed SSE output and fixed AI Battery. Draft checked separately by provider; no account/model or physical wheel device claim.'}
  $taskResult.sharedNotificationChecked=[bool]$CodexNotify
+ $taskResult.persistentBatteryFooter=[bool]$Footer
  $taskResult.streamingInputScrollResize=[bool]$Streaming
  [IO.File]::WriteAllText((Join-Path $taskFixture 'verification.json'),($taskResult|ConvertTo-Json),[Text.UTF8Encoding]::new($false))
  $taskResult|ConvertTo-Json

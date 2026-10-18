@@ -136,12 +136,28 @@ impl Transport {
         self.console.terminate();
         // Wake an idle writer; a full queue also wakes it and the stop flag wins.
         let _ = self.input.sender.try_send(PtyCommand::Shutdown);
-        self.ctx.request_repaint();
+        self.ctx.request_repaint_of(egui::ViewportId::ROOT);
     }
 }
 
 type ColorFormatter = Arc<dyn Fn(alacritty_terminal::vte::ansi::Rgb) -> String + Sync + Send>;
 type ColorRequests = Arc<Mutex<Vec<(usize, ColorFormatter)>>>;
+
+#[derive(Default)]
+struct OutputState {
+    decoder: crate::win32_input::Decoder,
+    battery: Option<Arc<crate::battery::Row>>,
+    battery_pending: bool,
+}
+impl OutputState {
+    fn commit_battery(&mut self, term: &Term<EventProxy>) {
+        if std::mem::take(&mut self.battery_pending) {
+            if let Some(row) = crate::battery::Row::find(term) {
+                self.battery = Some(Arc::new(row));
+            }
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct EventProxy {
@@ -153,6 +169,7 @@ pub struct EventProxy {
     replies: Arc<Mutex<Vec<u8>>>,
     reply_overflow: Arc<AtomicBool>,
     reply_rate: Arc<Mutex<ReplyRate>>,
+    output_state: Arc<Mutex<OutputState>>,
 }
 impl EventProxy {
     fn reply(&self, text: String) {
@@ -239,9 +256,36 @@ fn parse_output(
 ) {
     // Resolve queries at OSC terminators, before a later escape changes the palette.
     // The parser already owns the VT lock; callbacks must never try to lock it again.
-    for chunk in bytes.split_inclusive(|byte| matches!(*byte, 7 | b'\\')) {
+    let mut state = proxy.output_state.lock().unwrap_or_else(|p| p.into_inner());
+    for chunk in bytes.split_inclusive(|byte| matches!(*byte, 7 | b'\\' | 27 | b'\n' | b'\r')) {
+        state.decoder.advance(chunk);
+        if state.decoder.prompt_started {
+            state.battery = None;
+            state.battery_pending = false;
+        }
+        proxy
+            .input
+            .win32
+            .store(state.decoder.active, Ordering::Release);
+        let synchronized = processor.sync_bytes_count() > 0;
         processor.advance(term, chunk);
         reply_to_color_requests(term, proxy);
+        // Capture before a following cursor restore/erase can remove this row,
+        // including when both operations arrive in the same pipe read.
+        if chunk.contains(&b'%') {
+            if processor.sync_bytes_count() > 0 {
+                state.battery_pending = true;
+            } else {
+                let line =
+                    term.grid().cursor.point.line.0 - i32::from(chunk.last() == Some(&b'\n'));
+                if let Some(row) = crate::battery::Row::capture(term, line) {
+                    state.battery = Some(Arc::new(row));
+                }
+            }
+        }
+        if synchronized && processor.sync_bytes_count() == 0 {
+            state.commit_battery(term);
+        }
     }
 }
 
@@ -275,13 +319,19 @@ impl OutputParser {
         if self.visible.load(Ordering::Acquire)
             && !self.repaint_pending.swap(true, Ordering::AcqRel)
         {
-            self.ctx.request_repaint_after(Duration::from_millis(8));
+            self.ctx
+                .request_repaint_after_for(Duration::from_millis(8), egui::ViewportId::ROOT);
         }
     }
 
     fn finish_sync(&self, processor: &mut Processor) -> Result<(), String> {
         let mut term = self.term.lock();
         processor.stop_sync(&mut *term);
+        self.proxy
+            .output_state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .commit_battery(&term);
         reply_to_color_requests(&term, &self.proxy);
         drop(term);
         self.proxy.flush_replies()?;
@@ -291,7 +341,6 @@ impl OutputParser {
 
     fn run(self, output: Receiver<Vec<u8>>) {
         let mut processor: Processor = Processor::new();
-        let mut input_mode = crate::win32_input::Decoder::default();
         loop {
             // Wait indefinitely while idle, and use the VT core's deadline only
             // during a synchronized frame. Blocking pipe reads cannot expire it.
@@ -313,11 +362,6 @@ impl OutputParser {
             };
             match received {
                 Ok(bytes) => {
-                    input_mode.advance(&bytes);
-                    self.proxy
-                        .input
-                        .win32
-                        .store(input_mode.active, Ordering::Release);
                     parse_output(&mut processor, &mut self.term.lock(), &self.proxy, &bytes);
                     if let Err(error) = self.proxy.flush_replies() {
                         if let Some(transport) = &self.transport {
@@ -379,6 +423,7 @@ pub struct Session {
     pub title: Arc<Mutex<String>>,
     pub error: Arc<Mutex<Option<String>>>,
     summary_cache: Mutex<(u64, crate::mini::Summary)>,
+    output_state: Arc<Mutex<OutputState>>,
     dimensions: Arc<Mutex<WindowSize>>,
     transport: Arc<Transport>,
     prompt_files: crate::prompt::PromptFiles,
@@ -452,7 +497,9 @@ impl Session {
             replies: Default::default(),
             reply_overflow: Default::default(),
             reply_rate: Default::default(),
+            output_state: Default::default(),
         };
+        let output_state = proxy.output_state.clone();
         let term = Arc::new(FairMutex::new(Term::new(
             crate::terminal_budget::config(scrollback, 80),
             &GridSize { cols: 80, rows: 24 },
@@ -567,7 +614,7 @@ impl Session {
                                     applied.num_cols = cols;
                                     applied.num_lines = rows;
                                     write_revision.fetch_add(1, Ordering::Release);
-                                    write_ctx.request_repaint();
+                                    write_ctx.request_repaint_of(egui::ViewportId::ROOT);
                                     Ok(())
                                 })
                             }
@@ -597,7 +644,7 @@ impl Session {
                 _ => {}
             }
             wait_exit.store(true, Ordering::Release);
-            ctx.request_repaint();
+            ctx.request_repaint_of(egui::ViewportId::ROOT);
             // The terminal's event proxy also owns an input sender. Explicitly
             // close transport rather than waiting for that reference cycle.
             // Let ClosePseudoConsole and the reader drain final output. Only a
@@ -621,6 +668,7 @@ impl Session {
             title,
             error,
             summary_cache: Mutex::new((0, Default::default())),
+            output_state,
             dimensions,
             transport,
             prompt_files,
@@ -642,6 +690,14 @@ impl Session {
             cache.0 = revision;
         }
         cache.1.clone()
+    }
+
+    pub(crate) fn battery(&self) -> Option<Arc<crate::battery::Row>> {
+        self.output_state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .battery
+            .clone()
     }
 
     pub fn resize(&self, cols: u16, rows: u16, cell_width: u16, cell_height: u16) {
@@ -681,6 +737,75 @@ impl Drop for Session {
 mod tests {
     use super::*;
     use alacritty_terminal::term::Config;
+
+    #[test]
+    fn battery_survives_erase_resize_and_split_output_until_the_shell_prompt() {
+        let stream = "\x1b7\x1b[4;1HAI Battery \x1b[32m❚❚\x1b[0m 67%\x1b8\x1b[2J\x1b[H› draft";
+        for chunk_size in [1, 2, 7, stream.len()] {
+            let parser = output_fixture();
+            let mut processor = Processor::new();
+            let mut term = parser.term.lock();
+            for chunk in stream.as_bytes().chunks(chunk_size) {
+                parse_output(&mut processor, &mut term, &parser.proxy, chunk);
+            }
+            let row = parser
+                .proxy
+                .output_state
+                .lock()
+                .unwrap()
+                .battery
+                .clone()
+                .expect("observed battery survives an erase in the same read");
+            assert_eq!(row.text, "AI Battery ❚❚ 67%");
+            assert_eq!(
+                row.cells[11].fg,
+                alacritty_terminal::vte::ansi::Color::Named(
+                    alacritty_terminal::vte::ansi::NamedColor::Green
+                )
+            );
+            term.resize(GridSize { cols: 55, rows: 8 });
+            assert_eq!(
+                parser
+                    .proxy
+                    .output_state
+                    .lock()
+                    .unwrap()
+                    .battery
+                    .as_ref()
+                    .unwrap()
+                    .text,
+                row.text
+            );
+            for byte in b"\x1b]133;A\x1b\\" {
+                parse_output(&mut processor, &mut term, &parser.proxy, &[*byte]);
+            }
+            assert!(parser.proxy.output_state.lock().unwrap().battery.is_none());
+        }
+    }
+
+    #[test]
+    fn synchronized_battery_frame_is_captured_when_committed() {
+        let parser = output_fixture();
+        let mut processor = Processor::new();
+        let mut term = parser.term.lock();
+        parse_output(
+            &mut processor,
+            &mut term,
+            &parser.proxy,
+            "\x1b[?2026h\x1b[4;1HClaude ❚❚ 90%\x1b[1;1H\x1b[?2026l".as_bytes(),
+        );
+        assert_eq!(
+            parser
+                .proxy
+                .output_state
+                .lock()
+                .unwrap()
+                .battery
+                .as_ref()
+                .map(|row| row.text.as_str()),
+            Some("Claude ❚❚ 90%")
+        );
+    }
 
     #[test]
     #[ignore = "Requires an isolated native Codex capture in MINITERM_CODEX_UI_CAPTURE"]
@@ -874,6 +999,7 @@ mod tests {
             replies: Default::default(),
             reply_overflow: Default::default(),
             reply_rate: Default::default(),
+            output_state: Default::default(),
         };
         OutputParser {
             term: Arc::new(FairMutex::new(Term::new(
@@ -1105,6 +1231,7 @@ mod tests {
             replies: Default::default(),
             reply_overflow: Default::default(),
             reply_rate: Default::default(),
+            output_state: Default::default(),
         };
         let mut term = Term::new(
             Config::default(),

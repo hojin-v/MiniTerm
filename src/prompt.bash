@@ -34,6 +34,8 @@ builtin shopt -q promptvars && __miniterm_original_promptvars=1
 __miniterm_managed_ps1=
 __miniterm_apply_prompt() {
     local __miniterm_status=$?
+    # End a program's status row when the real shell is ready for another command.
+    builtin printf '\033]133;A\007'
     local -a __miniterm_state
     # mapfile buffers the small file; six separate read calls cause extra MSYS file I/O.
     if builtin mapfile -t __miniterm_state 2>/dev/null < "$__miniterm_prompt_file" && [[ ${#__miniterm_state[@]} == 6 ]]; then

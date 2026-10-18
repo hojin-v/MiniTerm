@@ -665,7 +665,7 @@ unsafe extern "system" fn display_callback(
             let x = lparam as i16 as i32 - bounds.x;
             let y = (lparam >> 16) as i16 as i32 - bounds.y;
             if x >= 0 && y >= 0 && x < bounds.width as i32 && y < bounds.height as i32 {
-                let edge = (4.0 * window_scale(hwnd as isize)).ceil() as i32;
+                let edge = (7.0 * window_scale(hwnd as isize)).ceil() as i32;
                 let left = x < edge;
                 let right = x >= bounds.width as i32 - edge;
                 let top = y < edge;
@@ -685,6 +685,20 @@ unsafe extern "system" fn display_callback(
                     return hit as isize;
                 }
             }
+        }
+    }
+    if message == windows_sys::Win32::UI::WindowsAndMessaging::WM_SETCURSOR {
+        use windows_sys::Win32::UI::WindowsAndMessaging::*;
+        let cursor = match (lparam & 0xffff) as u32 {
+            HTLEFT | HTRIGHT => Some(IDC_SIZEWE),
+            HTTOP | HTBOTTOM => Some(IDC_SIZENS),
+            HTTOPLEFT | HTBOTTOMRIGHT => Some(IDC_SIZENWSE),
+            HTTOPRIGHT | HTBOTTOMLEFT => Some(IDC_SIZENESW),
+            _ => None,
+        };
+        if let Some(cursor) = cursor {
+            SetCursor(LoadCursorW(std::ptr::null_mut(), cursor));
+            return 1;
         }
     }
     if message == windows_sys::Win32::UI::WindowsAndMessaging::WM_GETMINMAXINFO && lparam != 0 {
